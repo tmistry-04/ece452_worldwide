@@ -1,6 +1,22 @@
 # P2: Weekly Updates
 
 <details>
+<summary>June 8th (Week 5)</summary>
+
+During the week of June 2nd to June 8th:
+- [All members] Initialized the Android Studio project
+- [Dhyey] set up the AWS Cognito user pools
+- [Yuna and Adora] sketched out app logo + homepage ideas (will upload and attach here tonight)
+- Set up backend and database skeleton for:
+    - [Tanisha] users
+    - [Asel] pantry
+    - [Tony] recipes and groceries
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>June 1st (Week 4)</summary>
 
 During the week of May 25th to June 1st:
