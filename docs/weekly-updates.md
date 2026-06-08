@@ -5,6 +5,7 @@
 
 During the week of June 2nd to June 8th:
 - [All members] Initialized the Android Studio project
+- [All members] Finalized project proposal for submission
 - [Dhyey] set up the AWS Cognito user pools
 - [Yuna and Adora] sketched out app logo + homepage ideas (will upload and attach here tonight)
 - Set up backend and database skeleton for:
