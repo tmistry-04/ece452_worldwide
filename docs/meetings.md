@@ -1,6 +1,29 @@
 # Team Worldwide: Meeting Notes
 
 <details>
+<summary>June 9</summary>
+  
+**Attendees:** All members
+
+#### Prototype Presentation Prep
+- Scenario 1 to be demoed
+- [Yuna and Adora] Frontend / UI (Figma): pantry screen, recipe list, recipe detail
+- Data layer:
+  - Firebase
+  - pantry storage
+  - Spoonacular API (figure out how it works with Android Studio)
+  - OpenRouter for AI
+- [Dhyey] Architecture
+- Receipt scanning will be planned and mapped out but not fully functional for the demo
+  
+#### Action Items
+
+- Backend meeting on Thursday (Jun 11 @ 11am) (frontend will be present), internal deadlines to be determined then
+- Find good resources on Android Studio
+-   Android Studio workshop in lecture on Wednesday (Jun 10)
+</details>
+
+<details>
 <summary>May 26</summary>
 
 **Attendees:** All members
