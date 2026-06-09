@@ -7,7 +7,7 @@ During the week of June 2nd to June 8th:
 - [All members] Initialized the Android Studio project
 - [All members] Finalized project proposal for submission
 - [Dhyey] set up the AWS Cognito user pools
-- [Yuna and Adora] sketched out app logo + homepage ideas (will upload and attach here tonight)
+- [Yuna and Adora] sketched out app logo + homepage ideas (<img width="2544" height="2160" alt="image" src="https://github.com/user-attachments/assets/7a76a412-894b-4788-a3a8-130c8f97dd9f" />)
 - Set up backend and database skeleton for:
     - [Tanisha] users
     - [Asel] pantry
