@@ -4,19 +4,18 @@
 <summary>June 15th (Week 6)</summary>
 
 During the week of June 9th to June 15th:
-- [All members] decided on server-client (?) architectural design
+- [All members] decided on server-client architectural design
 - Backend team:
     - [All members] decided on using Kotlin and Firebase
-    - [?] worked on Core Inventory functionality:
+    - [Tony and Asel] worked on Core Inventory functionality:
         - Manual ingredient entry; Edit/Remove ingredient entry; Expiry date input (LLM enters a general expiry date that user must confirm if user/product does not specify); Onboarding demonstration of app flow; Push notifs for near-expiry items
-    - [?] worked on Recipe and Grocery functionality:
+    - [Tanisha and Dhyey] worked on Recipe and Grocery functionality:
         - Inventory-based recipe suggestions with ingredient match count indicating how many of required ingredients the user possesses and missing ingredients in b&w
         - For saved recipes, missing ingredients are added to ongoing grocery list 
 - Frontend team:
     - [Yuna and Adora] completed this intro to Figma course: https://help.figma.com/hc/en-us/sections/30880632542743-Figma-Design-for-beginners
     - [Yuna and Adora] scaffolded pages for UI with mock elements:
         - Login/Signup screen, Pantry screen, Recipe discovery screen, Grocery list screen, Dietary profile screen, Expiry Log screen, Saved Recipes screen
-        - (link to folder?)
 
 Questions for Lesley and teaching team: 
 
