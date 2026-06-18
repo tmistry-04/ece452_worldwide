@@ -9,5 +9,7 @@ data class PantryItem(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val quantity: Int,
-    val expiryDate: Long? = null // epoch millis, optional
+    val unit: String = "piece",        // unit chosen from Spoonacular's possibleUnits
+    val spoonacularId: Int,            // ingredient id from Spoonacular; always set via autocomplete
+    val expiryDate: Long? = null       // epoch millis, optional
 )

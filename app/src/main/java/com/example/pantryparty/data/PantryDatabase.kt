@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [PantryItem::class], version = 1, exportSchema = false)
+@Database(entities = [PantryItem::class], version = 3, exportSchema = false)
 abstract class PantryDatabase : RoomDatabase() {
     abstract fun pantryDao(): PantryDao
 
@@ -20,7 +20,7 @@ abstract class PantryDatabase : RoomDatabase() {
                     context.applicationContext,
                     PantryDatabase::class.java,
                     "pantry.db"
-                ).build().also { INSTANCE = it }
+                ).fallbackToDestructiveMigration(true).build().also { INSTANCE = it }
             }
     }
 }
