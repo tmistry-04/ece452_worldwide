@@ -25,6 +25,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -46,6 +48,7 @@ import com.example.pantryparty.data.PantryDatabase
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.IngredientAutocomplete
 import com.example.pantryparty.network.SpoonacularRepository
+import com.example.pantryparty.ui.RecipeScreen
 import com.example.pantryparty.ui.theme.PantryPartyTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -57,21 +60,58 @@ class MainActivity : ComponentActivity() {
         val dao = PantryDatabase.getInstance(this).pantryDao()
         setContent {
             PantryPartyTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(
-                        modifier = Modifier
-                            .padding(innerPadding)
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        AddIngredientScreen(dao = dao)
-                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                        PantryList(dao = dao)
-                    }
-                }
+                MainScaffold(dao = dao)
             }
         }
     }
+}
+
+/** Top-level screens reachable from the bottom navigation bar. */
+private enum class Tab(val label: String) { PANTRY("Pantry"), RECIPES("Recipes") }
+
+@Composable
+fun MainScaffold(dao: PantryDao) {
+    var tab by remember { mutableStateOf(Tab.PANTRY) }
+
+    Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == Tab.PANTRY,
+                    onClick = { tab = Tab.PANTRY },
+                    icon = { Text("🥫") },
+                    label = { Text(Tab.PANTRY.label) }
+                )
+                NavigationBarItem(
+                    selected = tab == Tab.RECIPES,
+                    onClick = { tab = Tab.RECIPES },
+                    icon = { Text("🍳") },
+                    label = { Text(Tab.RECIPES.label) }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        ) {
+            when (tab) {
+                Tab.PANTRY -> PantryScreen(dao = dao)
+                Tab.RECIPES -> RecipeScreen(dao = dao)
+            }
+        }
+    }
+}
+
+/** Original home screen: add an ingredient, then the pantry list. */
+@Composable
+fun PantryScreen(dao: PantryDao) {
+    AddIngredientScreen(dao = dao)
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    PantryList(dao = dao)
 }
 
 /**

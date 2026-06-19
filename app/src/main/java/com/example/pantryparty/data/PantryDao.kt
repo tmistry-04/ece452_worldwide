@@ -13,6 +13,10 @@ interface PantryDao {
     @Query("SELECT * FROM pantry_items ORDER BY name")
     fun observeAll(): Flow<List<PantryItem>>
 
+    /** One-shot snapshot of the whole pantry (used by the recipe recommender). */
+    @Query("SELECT * FROM pantry_items ORDER BY name")
+    suspend fun getAll(): List<PantryItem>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: PantryItem)
 

@@ -28,4 +28,22 @@ interface SpoonacularApi {
         @Query("unit") unit: String = "grams",
         @Query("apiKey") apiKey: String
     ): IngredientInfo
+
+    // Recipes the user can (almost) make from a set of ingredient names.
+    @GET("recipes/findByIngredients")
+    suspend fun findRecipesByIngredients(
+        @Query("ingredients") ingredients: String,   // comma-separated names
+        @Query("number") number: Int = 20,
+        @Query("ranking") ranking: Int = 2,          // 2 = minimize missing ingredients
+        @Query("ignorePantry") ignorePantry: Boolean = true,
+        @Query("apiKey") apiKey: String
+    ): List<RecipeByIngredient>
+
+    // Full details (with required amounts) for several recipes at once.
+    @GET("recipes/informationBulk")
+    suspend fun getRecipeInformationBulk(
+        @Query("ids") ids: String,                   // comma-separated recipe ids
+        @Query("includeNutrition") includeNutrition: Boolean = false,
+        @Query("apiKey") apiKey: String
+    ): List<RecipeInformation>
 }

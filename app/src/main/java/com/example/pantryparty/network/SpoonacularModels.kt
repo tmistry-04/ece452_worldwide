@@ -62,3 +62,59 @@ data class EstimatedCost(
     val value: Double,
     val unit: String
 )
+
+// ---------------------------------------------------------------------------
+// Recipe endpoints
+// ---------------------------------------------------------------------------
+
+/** One recipe from findByIngredients — counts are presence-based (no amounts). */
+data class RecipeByIngredient(
+    val id: Int,
+    val title: String,
+    val image: String?,
+    val usedIngredientCount: Int,
+    val missedIngredientCount: Int,
+    val usedIngredients: List<RecipeIngredientBrief> = emptyList(),
+    val missedIngredients: List<RecipeIngredientBrief> = emptyList()
+)
+
+/** Lightweight ingredient shape used inside findByIngredients results. */
+data class RecipeIngredientBrief(
+    val id: Int,
+    val name: String,
+    val amount: Double,
+    val unit: String,
+    val original: String?,
+    val image: String?
+)
+
+/** Full recipe details from informationBulk — carries required amounts. */
+data class RecipeInformation(
+    val id: Int,
+    val title: String,
+    val image: String?,
+    val readyInMinutes: Int?,
+    val servings: Int?,
+    val extendedIngredients: List<ExtendedIngredient> = emptyList()
+)
+
+/** A required ingredient with its amount/unit; `id` matches PantryItem.spoonacularId. */
+data class ExtendedIngredient(
+    val id: Int,
+    val name: String,
+    val amount: Double,
+    val unit: String,
+    val original: String?,
+    val measures: Measures?
+)
+
+data class Measures(
+    val metric: Measure?,
+    val us: Measure?
+)
+
+data class Measure(
+    val amount: Double,
+    val unitShort: String,
+    val unitLong: String
+)

@@ -33,4 +33,22 @@ object SpoonacularRepository {
 
     suspend fun getIngredientInfo(id: Int): Result<IngredientInfo> =
         runCatching { api.getIngredientInfo(id = id, apiKey = apiKey) }
+
+    // Joins ingredient names into the comma-separated form the endpoint expects.
+    suspend fun findRecipesByIngredients(
+        names: List<String>,
+        number: Int = 20
+    ): Result<List<RecipeByIngredient>> =
+        runCatching {
+            api.findRecipesByIngredients(
+                ingredients = names.joinToString(","),
+                number = number,
+                apiKey = apiKey
+            )
+        }
+
+    suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>> =
+        runCatching {
+            api.getRecipeInformationBulk(ids = ids.joinToString(","), apiKey = apiKey)
+        }
 }
