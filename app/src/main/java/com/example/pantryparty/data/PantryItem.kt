@@ -11,5 +11,6 @@ data class PantryItem(
     val quantity: Int,
     val unit: String = "piece",        // unit chosen from Spoonacular's possibleUnits
     val spoonacularId: Int,            // ingredient id from Spoonacular; always set via autocomplete
-    val expiryDate: Long? = null       // epoch millis, optional
+    val expiryDate: Long? = null,      // epoch millis, optional
+    val imageUrl: String? = null       // Spoonacular image filename (e.g. "apple.jpg"); used for thumbnails
 )

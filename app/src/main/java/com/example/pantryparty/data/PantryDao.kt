@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -19,6 +20,10 @@ interface PantryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: PantryItem)
+
+    /** Updates an existing row in place (e.g. after a quantity change). */
+    @Update
+    suspend fun update(item: PantryItem)
 
     @Delete
     suspend fun delete(item: PantryItem)

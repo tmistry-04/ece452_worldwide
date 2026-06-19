@@ -9,11 +9,24 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -26,12 +39,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
+import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.SpoonacularRepository
+import com.example.pantryparty.recipe.ConsumeResult
+import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
 import kotlinx.coroutines.launch
@@ -87,8 +104,18 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().padding(16.dp)) {
-        Text("Recipes", style = MaterialTheme.typography.headlineSmall)
+    // Owns its own vertical scroll (MainScaffold no longer provides one).
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+    ) {
+        Text(
+            "Recipes",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold
+        )
         Spacer(Modifier.height(12.dp))
 
         // Mode toggle
@@ -209,7 +236,24 @@ private fun PickIngredientsControls(
 @Composable
 private fun RecipeResults(recipes: List<RecipeByIngredient>, dao: PantryDao) {
     if (recipes.isEmpty()) {
-        Text("No recipes found within ${RecipeMatcher.MAX_MISSING} missing ingredients.")
+        // Polished empty-results state.
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Outlined.SearchOff,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "No recipes within ${RecipeMatcher.MAX_MISSING} missing ingredients.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         return
     }
 
@@ -227,15 +271,16 @@ private fun RecipeResults(recipes: List<RecipeByIngredient>, dao: PantryDao) {
     grouped.keys.sorted().forEach { count ->
         val header = if (count == 0) "Ready to make" else "Missing $count"
         Text(header, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
         grouped.getValue(count).forEach { recipe ->
             RecipeCard(recipe = recipe, dao = dao)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
         }
         Spacer(Modifier.height(8.dp))
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RecipeCard(recipe: RecipeByIngredient, dao: PantryDao) {
     val scope = rememberCoroutineScope()
@@ -243,71 +288,238 @@ private fun RecipeCard(recipe: RecipeByIngredient, dao: PantryDao) {
     var amountCheck by remember(recipe.id) { mutableStateOf<RecipeMatch?>(null) }
     var checking by remember(recipe.id) { mutableStateOf(false) }
     var checkError by remember(recipe.id) { mutableStateOf<String?>(null) }
+    // Pending deduction awaiting user confirmation (the "I made this" flow).
+    var pendingConsume by remember(recipe.id) { mutableStateOf<ConsumeResult?>(null) }
+
+    val isReady = recipe.missedIngredientCount == 0
 
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Text(recipe.title, fontWeight = FontWeight.Bold)
+        Column {
+            // Hero image (full width). Spoonacular returns an absolute URL here.
+            NetworkImage(
+                url = recipe.image,
+                contentDescription = recipe.title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+            )
 
-            if (recipe.missedIngredients.isNotEmpty()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text(
+                    recipe.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(Modifier.height(6.dp))
-                Text("Need:", style = MaterialTheme.typography.labelLarge)
-                recipe.missedIngredients.forEach { m ->
-                    Text("• ${m.name}", style = MaterialTheme.typography.bodySmall)
-                }
-            }
 
-            if (recipe.usedIngredients.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text("You have:", style = MaterialTheme.typography.labelLarge)
-                recipe.usedIngredients.forEach { u ->
-                    Text("• ${u.name}", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            // On-demand amount check: fetches just this one recipe (~1 point).
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(
-                    onClick = {
-                        scope.launch {
-                            checking = true
-                            checkError = null
-                            val pantry = dao.getAll()
-                            SpoonacularRepository.getRecipeInformationBulk(listOf(recipe.id))
-                                .onSuccess { infos ->
-                                    val info = infos.firstOrNull()
-                                    amountCheck = info?.let { RecipeMatcher.match(pantry, it) }
-                                }
-                                .onFailure { checkError = friendlyError(it) }
-                            checking = false
-                        }
+                // Status chip: ready vs. how many missing.
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = {
+                        Text(if (isReady) "Ready to make" else "Missing ${recipe.missedIngredientCount}")
                     },
-                    enabled = !checking
-                ) { Text("Check amounts") }
-                if (checking) {
-                    CircularProgressIndicator(modifier = Modifier.height(18.dp))
+                    leadingIcon = if (isReady) {
+                        { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                    } else null,
+                    colors = AssistChipDefaults.assistChipColors(
+                        disabledContainerColor = if (isReady)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else
+                            MaterialTheme.colorScheme.tertiaryContainer,
+                        disabledLabelColor = if (isReady)
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        else
+                            MaterialTheme.colorScheme.onTertiaryContainer,
+                        disabledLeadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                )
+
+                if (recipe.usedIngredients.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("You have:", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(4.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        recipe.usedIngredients.forEach { IngredientPill(it.name, owned = true) }
+                    }
                 }
-            }
 
-            checkError?.let {
-                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            }
+                if (recipe.missedIngredients.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Need:", style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(4.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        recipe.missedIngredients.forEach { IngredientPill(it.name, owned = false) }
+                    }
+                }
 
-            amountCheck?.let { AmountDetail(it) }
+                // Actions: on-demand amount check + "I made this" deduction.
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                checking = true
+                                checkError = null
+                                val pantry = dao.getAll()
+                                SpoonacularRepository.getRecipeInformationBulk(listOf(recipe.id))
+                                    .onSuccess { infos ->
+                                        val info = infos.firstOrNull()
+                                        amountCheck = info?.let { RecipeMatcher.match(pantry, it) }
+                                    }
+                                    .onFailure { checkError = friendlyError(it) }
+                                checking = false
+                            }
+                        },
+                        enabled = !checking
+                    ) { Text("Check amounts") }
+
+                    FilledTonalButton(
+                        onClick = {
+                            scope.launch {
+                                checking = true
+                                checkError = null
+                                val pantry = dao.getAll()
+                                // Fetch required amounts, then compute the deduction preview.
+                                SpoonacularRepository.getRecipeInformationBulk(listOf(recipe.id))
+                                    .onSuccess { infos ->
+                                        infos.firstOrNull()?.let { info ->
+                                            pendingConsume = PantryConsumer.consume(pantry, info)
+                                        }
+                                    }
+                                    .onFailure { checkError = friendlyError(it) }
+                                checking = false
+                            }
+                        },
+                        enabled = !checking
+                    ) { Text("I made this") }
+
+                    if (checking) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                checkError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+
+                amountCheck?.let { AmountDetail(it) }
+            }
         }
     }
+
+    // Confirmation dialog for "I made this" — applies on confirm.
+    pendingConsume?.let { result ->
+        MadeThisDialog(
+            result = result,
+            onDismiss = { pendingConsume = null },
+            onConfirm = {
+                scope.launch {
+                    // Apply the previewed deductions to the pantry.
+                    result.toUpdate.forEach { dao.update(it) }
+                    result.toDelete.forEach { dao.delete(it) }
+                }
+                pendingConsume = null
+            }
+        )
+    }
+}
+
+/** Small rounded pill for an ingredient name — green if owned, neutral if needed. */
+@Composable
+private fun IngredientPill(name: String, owned: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (owned)
+            MaterialTheme.colorScheme.secondaryContainer
+        else
+            MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Text(
+            name,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
+    }
+}
+
+/**
+ * Confirmation sheet for "I made this": shows exactly what will be deducted and
+ * what's skipped (different unit / not in pantry) before touching the pantry.
+ */
+@Composable
+private fun MadeThisDialog(
+    result: ConsumeResult,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val nothingToDo = result.toUpdate.isEmpty() && result.toDelete.isEmpty()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Made this recipe?") },
+        text = {
+            Column {
+                if (nothingToDo) {
+                    Text("Nothing in your pantry can be safely deducted for this recipe.")
+                } else {
+                    Text("Your pantry will be updated:", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    result.toUpdate.forEach {
+                        Text("• ${it.name} → ${it.quantity} ${it.unit} left", style = MaterialTheme.typography.bodySmall)
+                    }
+                    result.toDelete.forEach {
+                        Text("• ${it.name} → used up (removed)", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (result.skipped.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Skipped (different unit or not tracked):",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    result.skipped.forEach {
+                        Text("• $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            // Nothing to deduct -> just acknowledge.
+            if (nothingToDo) {
+                TextButton(onClick = onDismiss) { Text("OK") }
+            } else {
+                Button(onClick = onConfirm) { Text("Update pantry") }
+            }
+        },
+        dismissButton = if (nothingToDo) null else {
+            { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        }
+    )
 }
 
 /** Amount-level breakdown for one recipe after the on-demand details fetch. */
 @Composable
 private fun AmountDetail(match: RecipeMatch) {
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(8.dp))
     if (match.missing.isEmpty()) {
-        Text(
-            "You have enough of everything for this recipe.",
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Bold
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                "You have enough of everything.",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
         return
     }
     Text("Short on:", style = MaterialTheme.typography.labelLarge)

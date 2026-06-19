@@ -85,7 +85,8 @@ object RecipeMatcher {
         recipes.filter { it.missedIngredientCount <= MAX_MISSING }
             .sortedBy { it.missedIngredientCount }
 
-    private fun unitsMatch(a: String?, b: String?): Boolean {
+    /** Shared unit-equality rule, also reused by [PantryConsumer]. */
+    internal fun unitsMatch(a: String?, b: String?): Boolean {
         // Treat blank/"piece" loosely; otherwise compare normalized text.
         val na = a?.trim()?.lowercase().orEmpty()
         val nb = b?.trim()?.lowercase().orEmpty()
