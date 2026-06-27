@@ -5,9 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-// v4: added PantryItem.imageUrl. Destructive migration is configured below,
-// so the bump just resets local data — no hand-written migration needed.
-@Database(entities = [PantryItem::class], version = 4, exportSchema = false)
+// v5: added a unique index on PantryItem.spoonacularId (one row per ingredient).
+// Destructive migration is configured below, so the bump just resets local data —
+// no hand-written migration needed.
+@Database(entities = [PantryItem::class], version = 5, exportSchema = false)
 abstract class PantryDatabase : RoomDatabase() {
     abstract fun pantryDao(): PantryDao
 

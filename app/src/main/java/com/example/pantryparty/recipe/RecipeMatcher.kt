@@ -42,7 +42,7 @@ object RecipeMatcher {
 
     fun match(pantry: List<PantryItem>, recipe: RecipeInformation): RecipeMatch {
         // Index pantry by Spoonacular id for O(1) lookups per ingredient.
-        val byId = pantry.associateBy { it.spoonacularId }
+        val byId = indexByIngredient(pantry)
 
         val available = mutableListOf<MatchedIngredient>()
         val missing = mutableListOf<MissingIngredient>()
@@ -84,6 +84,20 @@ object RecipeMatcher {
     fun bucketByMissed(recipes: List<RecipeByIngredient>): List<RecipeByIngredient> =
         recipes.filter { it.missedIngredientCount <= MAX_MISSING }
             .sortedBy { it.missedIngredientCount }
+
+    /**
+     * Indexes the pantry by Spoonacular id. The DB enforces one row per ingredient,
+     * so this is normally a 1:1 map — but it is defensive against duplicate rows:
+     * same-unit duplicates have their quantities summed; if the units disagree there
+     * is no safe way to combine, so the first row wins. Shared with [PantryConsumer].
+     */
+    internal fun indexByIngredient(pantry: List<PantryItem>): Map<Int, PantryItem> =
+        pantry.groupBy { it.spoonacularId }.mapValues { (_, rows) ->
+            rows.reduce { acc, row ->
+                if (unitsMatch(acc.unit, row.unit)) acc.copy(quantity = acc.quantity + row.quantity)
+                else acc
+            }
+        }
 
     /** Shared unit-equality rule, also reused by [PantryConsumer]. */
     internal fun unitsMatch(a: String?, b: String?): Boolean {

@@ -121,7 +121,15 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
         // Mode toggle
         FlowRowModes(
             mode = mode,
-            onFromPantry = { mode = RecipeMode.FROM_PANTRY },
+            onFromPantry = {
+                mode = RecipeMode.FROM_PANTRY
+                // Drop any picked-ingredient results and let Mode A re-run fresh,
+                // so the pantry view never shows the previous mode's recipes.
+                recipes = emptyList()
+                hasSearched = false
+                error = null
+                pantryLoaded = false
+            },
             onPick = {
                 mode = RecipeMode.PICK_INGREDIENTS
                 recipes = emptyList()

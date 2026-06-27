@@ -30,7 +30,7 @@ object PantryConsumer {
 
     fun consume(pantry: List<PantryItem>, recipe: RecipeInformation): ConsumeResult {
         // Index the pantry by Spoonacular id for O(1) lookups per ingredient.
-        val byId = pantry.associateBy { it.spoonacularId }
+        val byId = RecipeMatcher.indexByIngredient(pantry)
 
         val toUpdate = mutableListOf<PantryItem>()
         val toDelete = mutableListOf<PantryItem>()

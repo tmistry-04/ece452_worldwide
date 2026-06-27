@@ -18,6 +18,10 @@ interface PantryDao {
     @Query("SELECT * FROM pantry_items ORDER BY name")
     suspend fun getAll(): List<PantryItem>
 
+    /** The existing row for an ingredient, if any — used to merge on add. */
+    @Query("SELECT * FROM pantry_items WHERE spoonacularId = :spoonacularId LIMIT 1")
+    suspend fun findBySpoonacularId(spoonacularId: Int): PantryItem?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: PantryItem)
 

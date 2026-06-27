@@ -461,22 +461,37 @@ fun AddIngredientCard(dao: PantryDao) {
 
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val qty = amount.toIntOrNull() ?: 0
                     FilledTonalButton(
                         onClick = {
-                            val qty = amount.toIntOrNull() ?: 1
+                            val unit = selectedUnit ?: "piece"
                             scope.launch {
-                                dao.upsert(
-                                    PantryItem(
+                                // Merge into the existing row instead of inserting a
+                                // duplicate for the same ingredient.
+                                val existing = dao.findBySpoonacularId(ingredient.id)
+                                val toSave = when {
+                                    existing == null -> PantryItem(
                                         name = ingredient.name,
                                         quantity = qty,
-                                        unit = selectedUnit ?: "piece",
+                                        unit = unit,
                                         spoonacularId = ingredient.id,
                                         imageUrl = ingredient.image   // persist for thumbnails
                                     )
-                                )
+                                    // Same unit -> add to what's already on hand.
+                                    existing.unit == unit ->
+                                        existing.copy(quantity = existing.quantity + qty)
+                                    // Different unit -> adopt the newly entered unit/amount.
+                                    else -> existing.copy(
+                                        quantity = qty,
+                                        unit = unit,
+                                        imageUrl = ingredient.image
+                                    )
+                                }
+                                dao.upsert(toSave)
                                 reset()
                             }
                         },
+                        enabled = qty > 0,
                         modifier = Modifier.weight(1f)
                     ) { Text("Save to pantry") }
                     TextButton(onClick = { reset() }) { Text("Cancel") }
