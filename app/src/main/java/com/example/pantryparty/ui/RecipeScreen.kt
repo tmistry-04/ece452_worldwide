@@ -31,77 +31,40 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
-import com.example.pantryparty.network.RecipeInformation
-import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.recipe.ConsumeResult
-import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
-import kotlinx.coroutines.launch
-import retrofit2.HttpException
-
-/** Which recipe-finding mode the screen is showing. */
-private enum class RecipeMode { FROM_PANTRY, PICK_INGREDIENTS }
-
-/** How many candidate recipes to request per search (keeps API point cost ~1). */
-private const val RECIPE_COUNT = 10
+import com.example.pantryparty.viewmodel.RecipeCardState
+import com.example.pantryparty.viewmodel.RecipeMode
+import com.example.pantryparty.viewmodel.RecipeViewModel
 
 /**
- * Feature 2 — recipe finding. Both modes use a single cheap findByIngredients
- * call (1 point), which already returns the have/missing split with staples
- * ignored. The amount ("do I have enough?") check is on-demand per recipe.
+ * Feature 2 — recipe finding. State and the Spoonacular calls live in
+ * [RecipeViewModel]; this screen observes its state and forwards events.
  *  - FROM_PANTRY:      uses every pantry item.
  *  - PICK_INGREDIENTS: uses only the items the user selects.
  */
 @Composable
 fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
-    val pantry by dao.observeAll().collectAsState(initial = emptyList())
+    val viewModel: RecipeViewModel = viewModel(factory = RecipeViewModel.factory(dao))
+    val pantry by viewModel.pantry.collectAsStateWithLifecycle()
+    val ui by viewModel.uiState.collectAsStateWithLifecycle()
+    val cardStates by viewModel.cardStates.collectAsStateWithLifecycle()
 
-    var mode by remember { mutableStateOf(RecipeMode.FROM_PANTRY) }
-    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
-
-    var recipes by remember { mutableStateOf<List<RecipeByIngredient>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var hasSearched by remember { mutableStateOf(false) }
-    // Guards Mode A so it auto-runs only once per entry, not on every pantry edit.
-    var pantryLoaded by remember { mutableStateOf(false) }
-
-    // One cheap call: findByIngredients returns have/missing already bucketed.
-    fun findRecipes(names: List<String>) {
-        if (names.isEmpty()) return
-        scope.launch {
-            loading = true
-            error = null
-            hasSearched = true
-            SpoonacularRepository.findRecipesByIngredients(names, number = RECIPE_COUNT)
-                .onSuccess { recipes = RecipeMatcher.bucketByMissed(it) }
-                .onFailure { error = friendlyError(it) }
-            loading = false
-        }
-    }
-
-    // Mode A auto-runs once when first opened with a non-empty pantry.
-    LaunchedEffect(mode, pantry.isNotEmpty()) {
-        if (mode == RecipeMode.FROM_PANTRY && pantry.isNotEmpty() && !pantryLoaded) {
-            pantryLoaded = true
-            findRecipes(pantry.map { it.name })
-        }
+    // Mode A auto-runs once when first opened (or re-entered) with a non-empty pantry.
+    LaunchedEffect(ui.mode, pantry.isNotEmpty()) {
+        viewModel.autoLoadFromPantryIfNeeded()
     }
 
     // Owns its own vertical scroll (MainScaffold no longer provides one).
@@ -120,66 +83,47 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
 
         // Mode toggle
         FlowRowModes(
-            mode = mode,
-            onFromPantry = {
-                mode = RecipeMode.FROM_PANTRY
-                // Drop any picked-ingredient results and let Mode A re-run fresh,
-                // so the pantry view never shows the previous mode's recipes.
-                recipes = emptyList()
-                hasSearched = false
-                error = null
-                pantryLoaded = false
-            },
-            onPick = {
-                mode = RecipeMode.PICK_INGREDIENTS
-                recipes = emptyList()
-                hasSearched = false
-                error = null
-            }
+            mode = ui.mode,
+            onFromPantry = viewModel::showFromPantry,
+            onPick = viewModel::showPickIngredients
         )
         Spacer(Modifier.height(12.dp))
 
-        when (mode) {
+        when (ui.mode) {
             RecipeMode.FROM_PANTRY -> FromPantryControls(
                 pantry = pantry,
-                onRefresh = { findRecipes(pantry.map { it.name }) }
+                onRefresh = viewModel::refreshFromPantry
             )
             RecipeMode.PICK_INGREDIENTS -> PickIngredientsControls(
                 pantry = pantry,
-                selectedIds = selectedIds,
-                onToggle = { id ->
-                    selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
-                },
-                onSearch = {
-                    val names = pantry.filter { it.id in selectedIds }.map { it.name }
-                    findRecipes(names)
-                }
+                selectedIds = ui.selectedIds,
+                onToggle = viewModel::toggleSelected,
+                onSearch = viewModel::searchSelected
             )
         }
 
         Spacer(Modifier.height(12.dp))
 
-        if (loading) {
+        if (ui.loading) {
             CircularProgressIndicator()
         }
-        error?.let {
+        ui.error?.let {
             Text(it, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(8.dp))
         }
 
-        if (!loading && hasSearched && error == null) {
-            RecipeResults(recipes = recipes, dao = dao)
+        if (!ui.loading && ui.hasSearched && ui.error == null) {
+            RecipeResults(
+                recipes = ui.recipes,
+                cardStates = cardStates,
+                onCheckAmounts = viewModel::checkAmounts,
+                onPrepareConsume = viewModel::prepareConsume,
+                onConfirmConsume = viewModel::confirmConsume,
+                onDismissConsume = viewModel::dismissConsume
+            )
         }
     }
 }
-
-/** Maps API failures to user-readable text (quota 402 gets a clear hint). */
-private fun friendlyError(t: Throwable): String =
-    if (t is HttpException && t.code() == 402) {
-        "Daily Spoonacular quota reached — try again after the daily reset or add a new API key."
-    } else {
-        "Error: ${t.message}"
-    }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -242,7 +186,14 @@ private fun PickIngredientsControls(
 }
 
 @Composable
-private fun RecipeResults(recipes: List<RecipeByIngredient>, dao: PantryDao) {
+private fun RecipeResults(
+    recipes: List<RecipeByIngredient>,
+    cardStates: Map<Int, RecipeCardState>,
+    onCheckAmounts: (Int) -> Unit,
+    onPrepareConsume: (Int) -> Unit,
+    onConfirmConsume: (Int) -> Unit,
+    onDismissConsume: (Int) -> Unit
+) {
     if (recipes.isEmpty()) {
         // Polished empty-results state.
         Column(
@@ -281,7 +232,14 @@ private fun RecipeResults(recipes: List<RecipeByIngredient>, dao: PantryDao) {
         Text(header, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         grouped.getValue(count).forEach { recipe ->
-            RecipeCard(recipe = recipe, dao = dao)
+            RecipeCard(
+                recipe = recipe,
+                cardState = cardStates[recipe.id] ?: RecipeCardState(),
+                onCheckAmounts = { onCheckAmounts(recipe.id) },
+                onPrepareConsume = { onPrepareConsume(recipe.id) },
+                onConfirmConsume = { onConfirmConsume(recipe.id) },
+                onDismissConsume = { onDismissConsume(recipe.id) }
+            )
             Spacer(Modifier.height(10.dp))
         }
         Spacer(Modifier.height(8.dp))
@@ -290,15 +248,14 @@ private fun RecipeResults(recipes: List<RecipeByIngredient>, dao: PantryDao) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RecipeCard(recipe: RecipeByIngredient, dao: PantryDao) {
-    val scope = rememberCoroutineScope()
-    // null = not checked yet; otherwise the amount-level result for this recipe.
-    var amountCheck by remember(recipe.id) { mutableStateOf<RecipeMatch?>(null) }
-    var checking by remember(recipe.id) { mutableStateOf(false) }
-    var checkError by remember(recipe.id) { mutableStateOf<String?>(null) }
-    // Pending deduction awaiting user confirmation (the "I made this" flow).
-    var pendingConsume by remember(recipe.id) { mutableStateOf<ConsumeResult?>(null) }
-
+private fun RecipeCard(
+    recipe: RecipeByIngredient,
+    cardState: RecipeCardState,
+    onCheckAmounts: () -> Unit,
+    onPrepareConsume: () -> Unit,
+    onConfirmConsume: () -> Unit,
+    onDismissConsume: () -> Unit
+) {
     val isReady = recipe.missedIngredientCount == 0
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -368,70 +325,35 @@ private fun RecipeCard(recipe: RecipeByIngredient, dao: PantryDao) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     TextButton(
-                        onClick = {
-                            scope.launch {
-                                checking = true
-                                checkError = null
-                                val pantry = dao.getAll()
-                                SpoonacularRepository.getRecipeInformationBulk(listOf(recipe.id))
-                                    .onSuccess { infos ->
-                                        val info = infos.firstOrNull()
-                                        amountCheck = info?.let { RecipeMatcher.match(pantry, it) }
-                                    }
-                                    .onFailure { checkError = friendlyError(it) }
-                                checking = false
-                            }
-                        },
-                        enabled = !checking
+                        onClick = onCheckAmounts,
+                        enabled = !cardState.checking
                     ) { Text("Check amounts") }
 
                     FilledTonalButton(
-                        onClick = {
-                            scope.launch {
-                                checking = true
-                                checkError = null
-                                val pantry = dao.getAll()
-                                // Fetch required amounts, then compute the deduction preview.
-                                SpoonacularRepository.getRecipeInformationBulk(listOf(recipe.id))
-                                    .onSuccess { infos ->
-                                        infos.firstOrNull()?.let { info ->
-                                            pendingConsume = PantryConsumer.consume(pantry, info)
-                                        }
-                                    }
-                                    .onFailure { checkError = friendlyError(it) }
-                                checking = false
-                            }
-                        },
-                        enabled = !checking
+                        onClick = onPrepareConsume,
+                        enabled = !cardState.checking
                     ) { Text("I made this") }
 
-                    if (checking) {
+                    if (cardState.checking) {
                         CircularProgressIndicator(modifier = Modifier.size(18.dp))
                     }
                 }
 
-                checkError?.let {
+                cardState.checkError?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
 
-                amountCheck?.let { AmountDetail(it) }
+                cardState.amountCheck?.let { AmountDetail(it) }
             }
         }
     }
 
     // Confirmation dialog for "I made this" — applies on confirm.
-    pendingConsume?.let { result ->
+    cardState.pendingConsume?.let { result ->
         MadeThisDialog(
             result = result,
-            onDismiss = { pendingConsume = null },
-            onConfirm = {
-                scope.launch {
-                    // Apply the previewed deductions to the pantry.
-                    result.toUpdate.forEach { dao.update(it) }
-                    result.toDelete.forEach { dao.delete(it) }
-                }
-                pendingConsume = null
-            }
+            onDismiss = onDismissConsume,
+            onConfirm = onConfirmConsume
         )
     }
 }

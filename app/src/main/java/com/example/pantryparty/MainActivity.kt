@@ -47,12 +47,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,17 +57,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryDatabase
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.IngredientAutocomplete
-import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.ui.NetworkImage
 import com.example.pantryparty.ui.RecipeScreen
 import com.example.pantryparty.ui.ingredientImageUrl
 import com.example.pantryparty.ui.theme.PantryPartyTheme
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import com.example.pantryparty.viewmodel.AddIngredientUiState
+import com.example.pantryparty.viewmodel.PantryViewModel
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -144,11 +142,15 @@ fun MainScaffold(dao: PantryDao) {
  * Pantry tab: a single scrolling list whose first item is the "add ingredient"
  * card, followed by the pantry rows. Using one LazyColumn (instead of an outer
  * scroll wrapping an inner list) keeps scrolling smooth for long pantries.
+ *
+ * All state and pantry mutations live in [PantryViewModel]; this composable only
+ * observes state and forwards events.
  */
 @Composable
 fun PantryScreen(dao: PantryDao) {
-    val scope = rememberCoroutineScope()
-    val items by dao.observeAll().collectAsState(initial = emptyList())
+    val viewModel: PantryViewModel = viewModel(factory = PantryViewModel.factory(dao))
+    val items by viewModel.pantry.collectAsStateWithLifecycle()
+    val addState by viewModel.addState.collectAsStateWithLifecycle()
 
     LazyColumn(
         modifier = Modifier
@@ -158,7 +160,17 @@ fun PantryScreen(dao: PantryDao) {
         contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp)
     ) {
         // Add-ingredient flow lives at the top of the list.
-        item { AddIngredientCard(dao = dao) }
+        item {
+            AddIngredientCard(
+                state = addState,
+                onQueryChange = viewModel::onQueryChange,
+                onSelectSuggestion = viewModel::selectSuggestion,
+                onSelectUnit = viewModel::selectUnit,
+                onAmountChange = viewModel::onAmountChange,
+                onSave = viewModel::save,
+                onCancel = viewModel::resetAdd
+            )
+        }
 
         item {
             Text(
@@ -174,18 +186,9 @@ fun PantryScreen(dao: PantryDao) {
             items(items, key = { it.id }) { item ->
                 PantryRow(
                     item = item,
-                    onIncrement = {
-                        // Bump the count by one.
-                        scope.launch { dao.upsert(item.copy(quantity = item.quantity + 1)) }
-                    },
-                    onDecrement = {
-                        // Decrement; using the last one removes the row entirely.
-                        scope.launch {
-                            if (item.quantity <= 1) dao.delete(item)
-                            else dao.upsert(item.copy(quantity = item.quantity - 1))
-                        }
-                    },
-                    onDelete = { scope.launch { dao.delete(item) } }
+                    onIncrement = { viewModel.increment(item) },
+                    onDecrement = { viewModel.decrement(item) },
+                    onDelete = { viewModel.delete(item) }
                 )
             }
         }
@@ -310,44 +313,21 @@ private fun StepperButton(icon: ImageVector, description: String, onClick: () ->
 /**
  * Guided ingredient entry, wrapped in a card:
  *   type -> autocomplete suggestions -> pick one -> pick a unit -> enter amount -> save.
+ *
+ * Stateless: all flow state lives in [AddIngredientUiState]; user actions are
+ * dispatched through the callbacks (wired to [PantryViewModel]).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun AddIngredientCard(dao: PantryDao) {
-    val scope = rememberCoroutineScope()
-
-    var query by remember { mutableStateOf("") }
-    var suggestions by remember { mutableStateOf<List<IngredientAutocomplete>>(emptyList()) }
-    var selected by remember { mutableStateOf<IngredientAutocomplete?>(null) }
-    var selectedUnit by remember { mutableStateOf<String?>(null) }
-    var amount by remember { mutableStateOf("1") }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    // Debounced autocomplete: re-runs on each keystroke, cancels the in-flight delay.
-    LaunchedEffect(query) {
-        if (selected != null || query.trim().length < 2) {
-            suggestions = emptyList()
-            return@LaunchedEffect
-        }
-        delay(300)
-        loading = true
-        error = null
-        SpoonacularRepository.autocompleteIngredients(query.trim())
-            .onSuccess { suggestions = it }
-            .onFailure { error = it.message }
-        loading = false
-    }
-
-    fun reset() {
-        query = ""
-        suggestions = emptyList()
-        selected = null
-        selectedUnit = null
-        amount = "1"
-        error = null
-    }
-
+fun AddIngredientCard(
+    state: AddIngredientUiState,
+    onQueryChange: (String) -> Unit,
+    onSelectSuggestion: (IngredientAutocomplete) -> Unit,
+    onSelectUnit: (String) -> Unit,
+    onAmountChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -363,33 +343,30 @@ fun AddIngredientCard(dao: PantryDao) {
             )
             Spacer(Modifier.height(12.dp))
 
+            val selected = state.selected
             if (selected == null) {
                 // Step 1: search + autocomplete dropdown
                 OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
+                    value = state.query,
+                    onValueChange = onQueryChange,
                     label = { Text("Start typing… e.g. apple") },
                     leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                if (loading) {
+                if (state.loading) {
                     Spacer(Modifier.height(8.dp))
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 }
-                if (suggestions.isNotEmpty()) {
+                if (state.suggestions.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Column {
-                        suggestions.forEach { s ->
+                        state.suggestions.forEach { s ->
                             // Suggestion row: thumbnail + name, tappable.
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable {
-                                        selected = s
-                                        selectedUnit = s.possibleUnits.firstOrNull()
-                                        suggestions = emptyList()
-                                    }
+                                    .clickable { onSelectSuggestion(s) }
                                     .padding(vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -407,12 +384,11 @@ fun AddIngredientCard(dao: PantryDao) {
                     }
                 }
             } else {
-                val ingredient = selected!!
                 // Step 2: chosen ingredient + unit picker
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     NetworkImage(
-                        url = ingredientImageUrl(ingredient.image),
-                        contentDescription = ingredient.name,
+                        url = ingredientImageUrl(selected.image),
+                        contentDescription = selected.name,
                         modifier = Modifier
                             .size(44.dp)
                             .clip(RoundedCornerShape(10.dp))
@@ -420,11 +396,11 @@ fun AddIngredientCard(dao: PantryDao) {
                     Spacer(Modifier.size(12.dp))
                     Column {
                         Text(
-                            text = ingredient.name.replaceFirstChar { it.uppercase() },
+                            text = selected.name.replaceFirstChar { it.uppercase() },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
-                        ingredient.aisle?.let {
+                        selected.aisle?.let {
                             Text("Aisle: $it", style = MaterialTheme.typography.bodySmall)
                         }
                     }
@@ -433,14 +409,14 @@ fun AddIngredientCard(dao: PantryDao) {
 
                 Text("Unit:", style = MaterialTheme.typography.labelLarge)
                 Spacer(Modifier.height(4.dp))
-                if (ingredient.possibleUnits.isEmpty()) {
+                if (selected.possibleUnits.isEmpty()) {
                     Text("No units returned — defaulting to \"piece\".")
                 } else {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ingredient.possibleUnits.forEach { unit ->
+                        selected.possibleUnits.forEach { unit ->
                             FilterChip(
-                                selected = selectedUnit == unit,
-                                onClick = { selectedUnit = unit },
+                                selected = state.selectedUnit == unit,
+                                onClick = { onSelectUnit(unit) },
                                 label = { Text(unit) }
                             )
                         }
@@ -452,53 +428,25 @@ fun AddIngredientCard(dao: PantryDao) {
                 Text("Amount:", style = MaterialTheme.typography.labelLarge)
                 Spacer(Modifier.height(4.dp))
                 OutlinedTextField(
-                    value = amount,
-                    onValueChange = { input -> amount = input.filter { it.isDigit() } },
-                    label = { Text("Number of ${selectedUnit ?: "units"}") },
+                    value = state.amount,
+                    onValueChange = onAmountChange,
+                    label = { Text("Number of ${state.selectedUnit ?: "units"}") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(Modifier.height(16.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val qty = amount.toIntOrNull() ?: 0
                     FilledTonalButton(
-                        onClick = {
-                            val unit = selectedUnit ?: "piece"
-                            scope.launch {
-                                // Merge into the existing row instead of inserting a
-                                // duplicate for the same ingredient.
-                                val existing = dao.findBySpoonacularId(ingredient.id)
-                                val toSave = when {
-                                    existing == null -> PantryItem(
-                                        name = ingredient.name,
-                                        quantity = qty,
-                                        unit = unit,
-                                        spoonacularId = ingredient.id,
-                                        imageUrl = ingredient.image   // persist for thumbnails
-                                    )
-                                    // Same unit -> add to what's already on hand.
-                                    existing.unit == unit ->
-                                        existing.copy(quantity = existing.quantity + qty)
-                                    // Different unit -> adopt the newly entered unit/amount.
-                                    else -> existing.copy(
-                                        quantity = qty,
-                                        unit = unit,
-                                        imageUrl = ingredient.image
-                                    )
-                                }
-                                dao.upsert(toSave)
-                                reset()
-                            }
-                        },
-                        enabled = qty > 0,
+                        onClick = onSave,
+                        enabled = state.quantity > 0,
                         modifier = Modifier.weight(1f)
                     ) { Text("Save to pantry") }
-                    TextButton(onClick = { reset() }) { Text("Cancel") }
+                    TextButton(onClick = onCancel) { Text("Cancel") }
                 }
             }
 
-            error?.let {
+            state.error?.let {
                 Spacer(Modifier.height(8.dp))
                 Text("Error: $it", color = MaterialTheme.colorScheme.error)
             }
