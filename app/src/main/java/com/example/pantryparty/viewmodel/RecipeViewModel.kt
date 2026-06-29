@@ -8,8 +8,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
+import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.SpoonacularRepository
-import com.example.pantryparty.recipe.ConsumeResult
+import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
@@ -30,6 +31,7 @@ data class RecipeUiState(
     val mode: RecipeMode = RecipeMode.FROM_PANTRY,
     val selectedIds: Set<Long> = emptySet(),
     val recipes: List<RecipeByIngredient> = emptyList(),
+    val staplesByRecipe: Map<Int, List<String>> = emptyMap(),   // recipe id -> staple names
     val loading: Boolean = false,
     val error: String? = null,
     val hasSearched: Boolean = false,
@@ -40,7 +42,17 @@ data class RecipeCardState(
     val checking: Boolean = false,
     val amountCheck: RecipeMatch? = null,   // null = amounts not checked yet
     val checkError: String? = null,
-    val pendingConsume: ConsumeResult? = null,  // non-null = confirmation dialog open
+    val consume: ConsumeDraft? = null,      // non-null = "I made this" dialog open
+)
+
+/**
+ * Open "I made this" dialog state: the suggested [plan] plus the user's current
+ * per-line deduction [amounts] (parallel to `plan.lines`, each clamped to what's
+ * on hand). Nothing is written to the pantry until the user confirms.
+ */
+data class ConsumeDraft(
+    val plan: ConsumePlan,
+    val amounts: List<Int>
 )
 
 /**
@@ -64,6 +76,10 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
     // Per-recipe state keyed by recipe id, so cards survive recomposition/scrolling.
     private val _cardStates = MutableStateFlow<Map<Int, RecipeCardState>>(emptyMap())
     val cardStates: StateFlow<Map<Int, RecipeCardState>> = _cardStates.asStateFlow()
+
+    // Full recipe details fetched once per search (for the card's staples list);
+    // reused by the amount/consume checks to avoid re-fetching. Main-thread only.
+    private var detailsById: Map<Int, RecipeInformation> = emptyMap()
 
     // Guards Mode A so it auto-runs only once per entry, not on every pantry edit.
     private var pantryLoaded = false
@@ -115,61 +131,120 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
         findRecipes(names)
     }
 
-    // One cheap call: findByIngredients returns have/missing already bucketed.
+    // findByIngredients returns have/missing already bucketed; a follow-up bulk
+    // details fetch fills in each card's staples list (and primes the cache).
     private fun findRecipes(names: List<String>) {
         if (names.isEmpty()) return
         viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, error = null, hasSearched = true) }
+            _uiState.update { it.copy(loading = true, error = null, hasSearched = true, staplesByRecipe = emptyMap()) }
             _cardStates.value = emptyMap()
+            detailsById = emptyMap()
             SpoonacularRepository.findRecipesByIngredients(names, number = RECIPE_COUNT)
                 .onSuccess { result ->
-                    _uiState.update { it.copy(recipes = RecipeMatcher.bucketByMissed(result), loading = false) }
+                    val recipes = RecipeMatcher.bucketByMissed(result)
+                    _uiState.update { it.copy(recipes = recipes, loading = false) }
+                    loadStaples(recipes)
                 }
                 .onFailure { e -> _uiState.update { it.copy(error = friendlyError(e), loading = false) } }
         }
     }
 
+    /**
+     * Fetches full details for the shown recipes once, caches them, and computes
+     * each recipe's staple list (ingredients the search ignored). Best-effort: if
+     * this call fails (e.g. quota), the results still show, just without staples.
+     */
+    private fun loadStaples(recipes: List<RecipeByIngredient>) {
+        if (recipes.isEmpty()) return
+        viewModelScope.launch {
+            SpoonacularRepository.getRecipeInformationBulk(recipes.map { it.id })
+                .onSuccess { infos ->
+                    detailsById = infos.associateBy { it.id }
+                    val staples = recipes.associate { r ->
+                        val info = detailsById[r.id]
+                        val nonStaple = (r.usedIngredients + r.missedIngredients).map { it.id }.toSet()
+                        r.id to (info?.let { RecipeMatcher.staplesOf(it, nonStaple).map { ing -> ing.name } } ?: emptyList())
+                    }
+                    _uiState.update { it.copy(staplesByRecipe = staples) }
+                }
+        }
+    }
+
+    /** Recipe details, reusing the per-search batch fetch when it's available. */
+    private suspend fun recipeDetails(recipeId: Int): Result<RecipeInformation?> =
+        detailsById[recipeId]?.let { Result.success(it) }
+            ?: SpoonacularRepository.getRecipeInformationBulk(listOf(recipeId)).map { it.firstOrNull() }
+
     // ---- Per-recipe actions (on-demand details fetch) ----
+
+    /**
+     * The recipe's non-staple ingredient ids, taken from the search result's
+     * used∪missed sets (staples were excluded there by `ignorePantry`). Lets the
+     * amount/consume checks treat staples separately. Null if the recipe isn't in
+     * the current results (falls back to checking every ingredient).
+     */
+    private fun nonStapleIds(recipeId: Int): Set<Int>? =
+        _uiState.value.recipes.firstOrNull { it.id == recipeId }
+            ?.let { r -> (r.usedIngredients + r.missedIngredients).map { it.id }.toSet() }
 
     /** Fetches required amounts and computes the "do I have enough?" breakdown. */
     fun checkAmounts(recipeId: Int) {
         viewModelScope.launch {
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
             val pantrySnapshot = dao.getAll()
-            SpoonacularRepository.getRecipeInformationBulk(listOf(recipeId))
-                .onSuccess { infos ->
-                    val match = infos.firstOrNull()?.let { RecipeMatcher.match(pantrySnapshot, it) }
+            val nonStaple = nonStapleIds(recipeId)
+            recipeDetails(recipeId)
+                .onSuccess { info ->
+                    val match = info?.let { RecipeMatcher.match(pantrySnapshot, it, nonStaple) }
                     updateCard(recipeId) { it.copy(amountCheck = match, checking = false) }
                 }
                 .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyError(e), checking = false) } }
         }
     }
 
-    /** Fetches required amounts and previews the deduction (the "I made this" flow). */
+    /** Fetches required amounts and opens the editable "I made this" dialog. */
     fun prepareConsume(recipeId: Int) {
         viewModelScope.launch {
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
             val pantrySnapshot = dao.getAll()
-            SpoonacularRepository.getRecipeInformationBulk(listOf(recipeId))
-                .onSuccess { infos ->
-                    val consume = infos.firstOrNull()?.let { PantryConsumer.consume(pantrySnapshot, it) }
-                    updateCard(recipeId) { it.copy(pendingConsume = consume, checking = false) }
+            val nonStaple = nonStapleIds(recipeId)
+            recipeDetails(recipeId)
+                .onSuccess { info ->
+                    val draft = info
+                        ?.let { PantryConsumer.plan(pantrySnapshot, it, nonStaple) }
+                        ?.let { plan -> ConsumeDraft(plan, plan.lines.map { it.suggested }) }
+                    updateCard(recipeId) { it.copy(consume = draft, checking = false) }
                 }
                 .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyError(e), checking = false) } }
         }
     }
 
-    /** Applies the previewed deductions to the pantry, then closes the dialog. */
-    fun confirmConsume(recipeId: Int) {
-        val result = _cardStates.value[recipeId]?.pendingConsume ?: return
-        viewModelScope.launch {
-            result.toUpdate.forEach { dao.update(it) }
-            result.toDelete.forEach { dao.delete(it) }
+    /** Bumps one dialog line's deduction amount, clamped to [0, quantity on hand]. */
+    fun adjustConsume(recipeId: Int, lineIndex: Int, delta: Int) = updateCard(recipeId) { card ->
+        val draft = card.consume ?: return@updateCard card
+        val line = draft.plan.lines.getOrNull(lineIndex) ?: return@updateCard card
+        val amounts = draft.amounts.toMutableList().also {
+            it[lineIndex] = (it[lineIndex] + delta).coerceIn(0, line.item.quantity)
         }
-        updateCard(recipeId) { it.copy(pendingConsume = null) }
+        card.copy(consume = draft.copy(amounts = amounts))
     }
 
-    fun dismissConsume(recipeId: Int) = updateCard(recipeId) { it.copy(pendingConsume = null) }
+    /** Applies the user-chosen deductions to the pantry, then closes the dialog. */
+    fun confirmConsume(recipeId: Int) {
+        val draft = _cardStates.value[recipeId]?.consume ?: return
+        viewModelScope.launch {
+            draft.plan.lines.forEachIndexed { i, line ->
+                val deduct = draft.amounts.getOrElse(i) { 0 }
+                if (deduct <= 0) return@forEachIndexed
+                val remaining = line.item.quantity - deduct
+                if (remaining <= 0) dao.delete(line.item)
+                else dao.update(line.item.copy(quantity = remaining))
+            }
+        }
+        updateCard(recipeId) { it.copy(consume = null) }
+    }
+
+    fun dismissConsume(recipeId: Int) = updateCard(recipeId) { it.copy(consume = null) }
 
     private fun updateCard(recipeId: Int, transform: (RecipeCardState) -> RecipeCardState) {
         _cardStates.update { map ->

@@ -14,7 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -25,6 +27,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -42,9 +46,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
-import com.example.pantryparty.recipe.ConsumeResult
+import com.example.pantryparty.recipe.ConsumeLine
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
+import com.example.pantryparty.viewmodel.ConsumeDraft
 import com.example.pantryparty.viewmodel.RecipeCardState
 import com.example.pantryparty.viewmodel.RecipeMode
 import com.example.pantryparty.viewmodel.RecipeViewModel
@@ -115,9 +120,11 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
         if (!ui.loading && ui.hasSearched && ui.error == null) {
             RecipeResults(
                 recipes = ui.recipes,
+                staplesByRecipe = ui.staplesByRecipe,
                 cardStates = cardStates,
                 onCheckAmounts = viewModel::checkAmounts,
                 onPrepareConsume = viewModel::prepareConsume,
+                onAdjustConsume = viewModel::adjustConsume,
                 onConfirmConsume = viewModel::confirmConsume,
                 onDismissConsume = viewModel::dismissConsume
             )
@@ -188,9 +195,11 @@ private fun PickIngredientsControls(
 @Composable
 private fun RecipeResults(
     recipes: List<RecipeByIngredient>,
+    staplesByRecipe: Map<Int, List<String>>,
     cardStates: Map<Int, RecipeCardState>,
     onCheckAmounts: (Int) -> Unit,
     onPrepareConsume: (Int) -> Unit,
+    onAdjustConsume: (recipeId: Int, lineIndex: Int, delta: Int) -> Unit,
     onConfirmConsume: (Int) -> Unit,
     onDismissConsume: (Int) -> Unit
 ) {
@@ -216,8 +225,9 @@ private fun RecipeResults(
         return
     }
 
-    // Headline: how many we can make right now.
-    val readyCount = recipes.count { it.missedIngredientCount == 0 }
+    // Headline: how many we can make right now. The `missedIngredients` list is the
+    // single source of truth for the whole card (badge, sections, and pills agree).
+    val readyCount = recipes.count { it.missedIngredients.isEmpty() }
     Text(
         "You can make $readyCount recipe(s) right now",
         style = MaterialTheme.typography.titleMedium,
@@ -226,7 +236,7 @@ private fun RecipeResults(
     Spacer(Modifier.height(8.dp))
 
     // Render section by section: Ready to make, Missing 1, Missing 2, Missing 3.
-    val grouped = recipes.groupBy { it.missedIngredientCount }
+    val grouped = recipes.groupBy { it.missedIngredients.size }
     grouped.keys.sorted().forEach { count ->
         val header = if (count == 0) "Ready to make" else "Missing $count"
         Text(header, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -234,9 +244,11 @@ private fun RecipeResults(
         grouped.getValue(count).forEach { recipe ->
             RecipeCard(
                 recipe = recipe,
+                staples = staplesByRecipe[recipe.id].orEmpty(),
                 cardState = cardStates[recipe.id] ?: RecipeCardState(),
                 onCheckAmounts = { onCheckAmounts(recipe.id) },
                 onPrepareConsume = { onPrepareConsume(recipe.id) },
+                onAdjustConsume = { lineIndex, delta -> onAdjustConsume(recipe.id, lineIndex, delta) },
                 onConfirmConsume = { onConfirmConsume(recipe.id) },
                 onDismissConsume = { onDismissConsume(recipe.id) }
             )
@@ -250,13 +262,15 @@ private fun RecipeResults(
 @Composable
 private fun RecipeCard(
     recipe: RecipeByIngredient,
+    staples: List<String>,
     cardState: RecipeCardState,
     onCheckAmounts: () -> Unit,
     onPrepareConsume: () -> Unit,
+    onAdjustConsume: (lineIndex: Int, delta: Int) -> Unit,
     onConfirmConsume: () -> Unit,
     onDismissConsume: () -> Unit
 ) {
-    val isReady = recipe.missedIngredientCount == 0
+    val isReady = recipe.missedIngredients.isEmpty()
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -282,7 +296,7 @@ private fun RecipeCard(
                     onClick = {},
                     enabled = false,
                     label = {
-                        Text(if (isReady) "Ready to make" else "Missing ${recipe.missedIngredientCount}")
+                        Text(if (isReady) "Ready to make" else "Missing ${recipe.missedIngredients.size}")
                     },
                     leadingIcon = if (isReady) {
                         { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
@@ -318,6 +332,11 @@ private fun RecipeCard(
                     }
                 }
 
+                if (staples.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    StaplesSection(staples)
+                }
+
                 // Actions: on-demand amount check + "I made this" deduction.
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -348,10 +367,11 @@ private fun RecipeCard(
         }
     }
 
-    // Confirmation dialog for "I made this" — applies on confirm.
-    cardState.pendingConsume?.let { result ->
+    // Editable "I made this" dialog — applies the user's chosen amounts on confirm.
+    cardState.consume?.let { draft ->
         MadeThisDialog(
-            result = result,
+            draft = draft,
+            onAdjust = onAdjustConsume,
             onDismiss = onDismissConsume,
             onConfirm = onConfirmConsume
         )
@@ -377,41 +397,47 @@ private fun IngredientPill(name: String, owned: Boolean) {
 }
 
 /**
- * Confirmation sheet for "I made this": shows exactly what will be deducted and
- * what's skipped (different unit / not in pantry) before touching the pantry.
+ * Editable "I made this" sheet: each deductible pantry ingredient gets a stepper
+ * (prefilled from the recipe amount) so the user chooses how much to use before
+ * anything is written. Ingredients we can't safely deduct are listed as skipped.
  */
 @Composable
 private fun MadeThisDialog(
-    result: ConsumeResult,
+    draft: ConsumeDraft,
+    onAdjust: (lineIndex: Int, delta: Int) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    val nothingToDo = result.toUpdate.isEmpty() && result.toDelete.isEmpty()
+    val nothingToDeduct = draft.plan.lines.isEmpty()
+    val anySelected = draft.amounts.any { it > 0 }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Made this recipe?") },
         text = {
             Column {
-                if (nothingToDo) {
+                if (nothingToDeduct) {
                     Text("Nothing in your pantry can be safely deducted for this recipe.")
                 } else {
-                    Text("Your pantry will be updated:", fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
-                    result.toUpdate.forEach {
-                        Text("• ${it.name} → ${it.quantity} ${it.unit} left", style = MaterialTheme.typography.bodySmall)
-                    }
-                    result.toDelete.forEach {
-                        Text("• ${it.name} → used up (removed)", style = MaterialTheme.typography.bodySmall)
+                    Text("Adjust how much you used, then update your pantry:", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(8.dp))
+                    draft.plan.lines.forEachIndexed { index, line ->
+                        ConsumeLineRow(
+                            line = line,
+                            amount = draft.amounts.getOrElse(index) { 0 },
+                            onDecrement = { onAdjust(index, -1) },
+                            onIncrement = { onAdjust(index, +1) }
+                        )
+                        Spacer(Modifier.height(6.dp))
                     }
                 }
-                if (result.skipped.isNotEmpty()) {
+                if (draft.plan.skipped.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Skipped (different unit or not tracked):",
+                        "Not in your pantry (nothing to deduct):",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    result.skipped.forEach {
+                    draft.plan.skipped.forEach {
                         Text("• $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -419,16 +445,55 @@ private fun MadeThisDialog(
         },
         confirmButton = {
             // Nothing to deduct -> just acknowledge.
-            if (nothingToDo) {
+            if (nothingToDeduct) {
                 TextButton(onClick = onDismiss) { Text("OK") }
             } else {
-                Button(onClick = onConfirm) { Text("Update pantry") }
+                Button(onClick = onConfirm, enabled = anySelected) { Text("Update pantry") }
             }
         },
-        dismissButton = if (nothingToDo) null else {
+        dismissButton = if (nothingToDeduct) null else {
             { TextButton(onClick = onDismiss) { Text("Cancel") } }
         }
     )
+}
+
+/** One editable row in [MadeThisDialog]: name + on-hand amount and a −/qty/+ stepper. */
+@Composable
+private fun ConsumeLineRow(
+    line: ConsumeLine,
+    amount: Int,
+    onDecrement: () -> Unit,
+    onIncrement: () -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                line.item.name.replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "have ${line.item.quantity} ${line.unit}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        DialogStepper(Icons.Filled.Remove, "Use less ${line.item.name}", enabled = amount > 0, onClick = onDecrement)
+        Text(
+            amount.toString(),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 10.dp)
+        )
+        DialogStepper(Icons.Filled.Add, "Use more ${line.item.name}", enabled = amount < line.item.quantity, onClick = onIncrement)
+    }
+}
+
+/** Small +/- button used by the "I made this" deduction steppers. */
+@Composable
+private fun DialogStepper(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(32.dp)) {
+        Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
+    }
 }
 
 /** Amount-level breakdown for one recipe after the on-demand details fetch. */
@@ -457,6 +522,25 @@ private fun AmountDetail(match: RecipeMatch) {
         val need = formatAmount(m.required.amount, m.required.unit, m.required.name)
         val haveNote = if (m.haveQuantity != null) "  (have ${m.haveQuantity} ${m.haveUnit})" else ""
         Text("• $need$haveNote", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/**
+ * Pantry staples (salt, water, sugar, oil…) the recipe needs but that `ignorePantry`
+ * assumes you have. Shown on the card as their own list — like the "You have"/"Need"
+ * pills — so they never read as "short on" or get deducted.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StaplesSection(names: List<String>) {
+    Text(
+        "Pantry staples (assumed on hand):",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(Modifier.height(4.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        names.forEach { IngredientPill(it, owned = true) }
     }
 }
 

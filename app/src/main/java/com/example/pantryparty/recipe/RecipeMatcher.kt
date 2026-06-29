@@ -40,7 +40,18 @@ object RecipeMatcher {
     /** Max missing ingredients a recipe may have to still be worth showing. */
     const val MAX_MISSING = 3
 
-    fun match(pantry: List<PantryItem>, recipe: RecipeInformation): RecipeMatch {
+    /**
+     * @param nonStapleIds the recipe's non-staple ingredient ids (the search's
+     * used∪missed set). Required ingredients whose id is absent from this set are
+     * pantry staples that `ignorePantry` assumes you have — they are skipped here
+     * so they never count as missing ("short on"); the card shows them on their
+     * own via [staplesOf]. Pass null to check every ingredient.
+     */
+    fun match(
+        pantry: List<PantryItem>,
+        recipe: RecipeInformation,
+        nonStapleIds: Set<Int>? = null
+    ): RecipeMatch {
         // Index pantry by Spoonacular id for O(1) lookups per ingredient.
         val byId = indexByIngredient(pantry)
 
@@ -48,6 +59,9 @@ object RecipeMatcher {
         val missing = mutableListOf<MissingIngredient>()
 
         for (required in recipe.extendedIngredients) {
+            // Staple (assumed on hand): not part of the amount check at all.
+            if (nonStapleIds != null && required.id !in nonStapleIds) continue
+
             val have = byId[required.id]
             when {
                 // Not in the pantry at all -> missing.
@@ -71,19 +85,28 @@ object RecipeMatcher {
         return RecipeMatch(recipe, available, missing)
     }
 
+    /**
+     * The recipe's staple ingredients — the ones `ignorePantry` assumes you have,
+     * i.e. required ingredients whose id is absent from [nonStapleIds] (the
+     * search's used∪missed set). Surfaced as their own list on the recipe card.
+     */
+    fun staplesOf(recipe: RecipeInformation, nonStapleIds: Set<Int>): List<ExtendedIngredient> =
+        recipe.extendedIngredients.filter { it.id !in nonStapleIds }
+
     /** Keeps recipes within [MAX_MISSING] and sorts fewest-missing first. */
     fun bucketAndSort(matches: List<RecipeMatch>): List<RecipeMatch> =
         matches.filter { it.missingCount <= MAX_MISSING }
             .sortedBy { it.missingCount }
 
     /**
-     * Recommender bucketing straight off findByIngredients — uses Spoonacular's
-     * own `missedIngredientCount` (staples excluded via ignorePantry), so it
-     * needs no extra API calls. Keeps recipes within [MAX_MISSING], fewest first.
+     * Recommender bucketing straight off findByIngredients — needs no extra API
+     * calls. Counts off the `missedIngredients` list (not the `missedIngredientCount`
+     * scalar) so filtering, sorting, and the card's badge/pills all agree on a
+     * single source of truth. Keeps recipes within [MAX_MISSING], fewest first.
      */
     fun bucketByMissed(recipes: List<RecipeByIngredient>): List<RecipeByIngredient> =
-        recipes.filter { it.missedIngredientCount <= MAX_MISSING }
-            .sortedBy { it.missedIngredientCount }
+        recipes.filter { it.missedIngredients.size <= MAX_MISSING }
+            .sortedBy { it.missedIngredients.size }
 
     /**
      * Indexes the pantry by Spoonacular id. The DB enforces one row per ingredient,

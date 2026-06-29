@@ -2,62 +2,83 @@ package com.example.pantryparty.recipe
 
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeInformation
-import kotlin.math.floor
+import kotlin.math.roundToInt
 
 /**
- * What a "I made this recipe" action will do to the pantry.
- *
- * @param toUpdate pantry rows whose quantity drops but stays above zero.
- * @param toDelete pantry rows fully consumed (quantity hit zero) — removed.
- * @param skipped  ingredient names left untouched (not in pantry, or the units
- *                 don't match so no safe deduction is possible).
+ * One editable deduction in the "I made this" dialog: a pantry row, a suggested
+ * starting amount, and the pantry row's unit. The user adjusts [suggested] in the
+ * dialog (in whole units) before anything is written to the pantry.
  */
-data class ConsumeResult(
-    val toUpdate: List<PantryItem>,
-    val toDelete: List<PantryItem>,
+data class ConsumeLine(
+    val item: PantryItem,
+    val suggested: Int,   // prefill in pantry units, clamped to what's on hand
+    val unit: String
+)
+
+/**
+ * The editable deduction plan for a recipe.
+ *
+ * @param lines   pantry rows that can be deducted, each with a suggested amount.
+ * @param skipped ingredient names the recipe needs but that aren't in the pantry,
+ *                so there's nothing to deduct.
+ */
+data class ConsumePlan(
+    val lines: List<ConsumeLine>,
     val skipped: List<String>
 )
 
 /**
  * Pure, Android-free deduction logic (testable like [RecipeMatcher]).
  *
- * Policy (confirmed with the user): only deduct when the pantry unit matches
- * the recipe unit. When units differ — or the ingredient isn't in the pantry —
- * we never guess a conversion; that ingredient is reported as `skipped` and
- * left exactly as-is.
+ * Builds a *suggested* plan only — it never writes to the pantry. The user adjusts
+ * the amounts in the dialog and the confirmed values are applied by the caller.
+ *
+ * Policy (confirmed with the user): because the deduction is now manual, every
+ * recipe ingredient that's in the pantry gets an editable line regardless of unit
+ * — the user picks how many they used. We prefill from the recipe amount only when
+ * the units match (otherwise we can't convert, so it starts at 0). Ingredients not
+ * in the pantry are reported as `skipped`; staples (see [nonStapleIds]) are assumed
+ * on hand and left out entirely (the card lists them separately).
  */
 object PantryConsumer {
 
-    fun consume(pantry: List<PantryItem>, recipe: RecipeInformation): ConsumeResult {
+    /**
+     * @param nonStapleIds the recipe's non-staple ingredient ids (the search's
+     * used∪missed set). Ingredients whose id is absent from this set are pantry
+     * staples — they are omitted from the plan entirely. Pass null to include
+     * every ingredient.
+     */
+    fun plan(
+        pantry: List<PantryItem>,
+        recipe: RecipeInformation,
+        nonStapleIds: Set<Int>? = null
+    ): ConsumePlan {
         // Index the pantry by Spoonacular id for O(1) lookups per ingredient.
         val byId = RecipeMatcher.indexByIngredient(pantry)
 
-        val toUpdate = mutableListOf<PantryItem>()
-        val toDelete = mutableListOf<PantryItem>()
+        val lines = mutableListOf<ConsumeLine>()
         val skipped = mutableListOf<String>()
 
         for (required in recipe.extendedIngredients) {
-            val have = byId[required.id]
-            when {
-                // Not in the pantry, or units differ -> can't safely deduct.
-                have == null || !RecipeMatcher.unitsMatch(have.unit, required.unit) ->
-                    skipped += required.name
+            // Staple (assumed on hand): not part of the manual deduction.
+            if (nonStapleIds != null && required.id !in nonStapleIds) continue
 
-                // Same unit: subtract the required amount (floored to whole units),
-                // never below zero. Reaching zero removes the row.
-                else -> {
-                    val remaining = floor(have.quantity - required.amount)
-                        .toInt()
-                        .coerceAtLeast(0)
-                    if (remaining == 0) {
-                        toDelete += have
-                    } else {
-                        toUpdate += have.copy(quantity = remaining)
-                    }
+            val have = byId[required.id]
+            if (have == null) {
+                // Not in the pantry -> nothing to deduct.
+                skipped += required.name
+            } else {
+                // In the pantry: editable line. Prefill from the recipe amount only
+                // when units match; otherwise start at 0 and let the user choose.
+                val suggested = if (RecipeMatcher.unitsMatch(have.unit, required.unit)) {
+                    required.amount.roundToInt().coerceIn(0, have.quantity)
+                } else {
+                    0
                 }
+                lines += ConsumeLine(have, suggested, have.unit)
             }
         }
 
-        return ConsumeResult(toUpdate, toDelete, skipped)
+        return ConsumePlan(lines, skipped)
     }
 }

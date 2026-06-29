@@ -3,6 +3,7 @@ package com.example.pantryparty
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.ExtendedIngredient
 import com.example.pantryparty.network.RecipeByIngredient
+import com.example.pantryparty.network.RecipeIngredientBrief
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.recipe.RecipeMatcher
 import org.junit.Assert.assertEquals
@@ -26,10 +27,14 @@ class RecipeMatcherTest {
             extendedIngredients = ingredients.toList()
         )
 
+    // bucketByMissed counts off the `missedIngredients` list, so populate it.
     private fun byIngredient(id: Int, missed: Int) =
         RecipeByIngredient(
             id = id, title = "R$id", image = null,
-            usedIngredientCount = 0, missedIngredientCount = missed
+            usedIngredientCount = 0, missedIngredientCount = missed,
+            missedIngredients = List(missed) { i ->
+                RecipeIngredientBrief(id = id * 100 + i, name = "m$i", amount = 1.0, unit = "g", original = null, image = null)
+            }
         )
 
     // --- tests ----------------------------------------------------------------
@@ -80,6 +85,29 @@ class RecipeMatcherTest {
     }
 
     @Test
+    fun staples_areNotCountedAsMissing() {
+        // salt (id 2) is absent from the pantry but it's a staple -> skipped by the
+        // amount check, so it never shows as "short" and the recipe stays makeable.
+        val match = RecipeMatcher.match(
+            pantry = listOf(pantry(1, qty = 3, unit = "cup")),
+            recipe = recipe(ing(1, 2.0, "cup"), ing(2, 1.0, "tsp", name = "salt")),
+            nonStapleIds = setOf(1)
+        )
+        assertEquals(0, match.missingCount)
+        assertTrue(match.canMake)
+    }
+
+    @Test
+    fun staplesOf_returnsIngredientsOutsideTheNonStapleSet() {
+        // Only id 1 is a "real" ingredient; everything else the recipe needs is a staple.
+        val staples = RecipeMatcher.staplesOf(
+            recipe = recipe(ing(1, 2.0, "cup", name = "flour"), ing(2, 1.0, "tsp", name = "salt")),
+            nonStapleIds = setOf(1)
+        )
+        assertEquals(listOf("salt"), staples.map { it.name })
+    }
+
+    @Test
     fun bucketAndSort_dropsOverThreeMissing_andSortsAscending() {
         // Recipe A: 2 missing, Recipe B: 0 missing, Recipe C: 4 missing (dropped).
         val empty = emptyList<PantryItem>()
@@ -112,7 +140,7 @@ class RecipeMatcherTest {
         val out = RecipeMatcher.bucketByMissed(input)
 
         assertEquals(3, out.size)                          // the missed=4 recipe dropped
-        assertEquals(listOf(0, 2, 3), out.map { it.missedIngredientCount })
+        assertEquals(listOf(0, 2, 3), out.map { it.missedIngredients.size })
         assertEquals(3, out.first().id)                    // ready-to-make recipe first
     }
 }
