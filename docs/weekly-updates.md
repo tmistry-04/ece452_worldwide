@@ -1,6 +1,26 @@
 # P2: Weekly Updates
 
 <details>
+<summary>June 29th (Week 8)</summary>
+
+During the weeks of June 16th to June 29th:
+- [All members] made slideshow and rehearsed in preparation for prototype presentation https://docs.google.com/presentation/d/1KwNaa00c-m9qoreILTOUFvL_CKchqwW9LxkRF-Ng3nM/edit?slide=id.g184d99d1a72_0_15#slide=id.g184d99d1a72_0_15
+- [All members] pivoted to MVVM architecture
+- Backend team:
+    - [Tony and Asel] 
+        - Implemented pulling data from the database and showing it on the pantry screen
+    - [Tanisha] 
+        - Implemented basic data entry and connected it to the backend database
+    - [Dhyey]
+        - Added database schemas for recipe storage and support for Anthropic LLM APIs
+- Frontend team:
+    - [Yuna and Adora] Created basic working prototypes of Authentication/Sign Up, Pantry Screen, and Saved Recipes screen
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>June 15th (Week 6)</summary>
 
 During the week of June 9th to June 15th:
