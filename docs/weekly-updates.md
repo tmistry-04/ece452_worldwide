@@ -6,6 +6,11 @@
 During the weeks of June 16th to June 29th:
 - [All members] made slideshow and rehearsed in preparation for prototype presentation https://docs.google.com/presentation/d/1KwNaa00c-m9qoreILTOUFvL_CKchqwW9LxkRF-Ng3nM/edit?slide=id.g184d99d1a72_0_15#slide=id.g184d99d1a72_0_15
 - [All members] pivoted to MVVM architecture
+- [All members] agreed to brainstorm and reflect on feedback from prototype presentation:
+    - don't make assumptions about pantry staples (maybe include option to let user set pantry staples)
+    - include option to add leftovers to pantry
+    - gameify food saving (exp points for using up food that's about to expire)
+    - connect to local grocery store flyers/coupons
 - Backend team:
     - [Tony and Asel] 
         - Implemented pulling data from the database and showing it on the pantry screen
