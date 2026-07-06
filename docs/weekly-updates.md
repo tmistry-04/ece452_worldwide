@@ -1,6 +1,21 @@
 # P2: Weekly Updates
 
 <details>
+<summary>July 6th (Week 9)</summary>
+
+During the week of June 29th to July 6th:
+- [Backend members] worked on:
+    - [Dhyey & Asel] ingredient-based recipe discovery connected to the backend (related to FR 6.1: The app shall generate recipe suggestions based on ingredients currently in the user’s pantry)
+    - [Tanisha] ingredient match count displayed per recipe (related to FR 6.2: The app shall display how many of a recipe’s required ingredients the user already has (e.g., 5 of 7 ingredients available))
+    - [Tony] cook time filter on recipe discovery screen (related to FR 6.3: The app shall allow users to filter recipes by cook time)
+- [Frontend members] worked on:
+    - [Yuna and Adora] implementing pantry screen and navigation bar per prototype presentation mock-up
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>June 29th (Week 8)</summary>
 
 During the weeks of June 16th to June 29th:
