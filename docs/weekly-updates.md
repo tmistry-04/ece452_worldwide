@@ -1,6 +1,22 @@
 # P2: Weekly Updates
 
 <details>
+<summary>July 13th (Week 10)</summary>
+
+During the week of July 6th to July 13th:
+- [Backend members] worked on:
+    - [Tanisha] missing ingredients per recipe (related to FR 3.1: The app shall identify which ingredients a selected recipe requires that are not currently in the user’s pantry)
+    - [Tony] view, edit, and clear grocery list (related to FR 3.3: The app shall allow users to view, edit, and clear their grocery list) and add missing ingredients to grocery list in one tap (related to FR 3.2: The app shall allow users to add missing ingredients to their grocery list in one tap) 
+    - [Asel] grocery list under user account (related to FR 1.4: The app shall allow users to maintain a personal grocery list tied to their account) 
+    - [Dhyey] push notifications for expiry alerts (related to FR 5.2: The app shall send push notifications to alert users when a pantry item is approaching or has reached its best before date)
+- [Frontend members] worked on:
+    - [Yuna and Adora] splash screen and pantry loading screen, recipe loading screen draft
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>July 6th (Week 9)</summary>
 
 During the week of June 29th to July 6th:
