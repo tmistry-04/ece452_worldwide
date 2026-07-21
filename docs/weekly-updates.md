@@ -1,6 +1,21 @@
 # P2: Weekly Updates
 
 <details>
+<summary>July 20th (Week 11)</summary>
+
+During the week of July 13th to July 20th:
+- [Backend members] worked on:
+    - [Tony] manual correction of misrecognized receipt items
+    - [Asel] recipe card visualization distinction (colour vs. greyscale) (related to NFR 1.2: Recipes for which the user possesses all necessary ingredients shall be in colour whereas recipes where ingredients are missing shall be black and white for a clear visualization of what recipes can be made with the user's inventory. )
+    - [Dhyey and Tanisha] Receipt scanning via Amazon Textract OCR (related to NFR 8.1: Receipt scanning shall correctly extract items from all the following major grocery stores in Canada: Costco, Loblaw Companies Ltd (e.g., Zehrs, T&T, Your Independent Grocer, Real Canadian Superstore), Metro Inc, Sobeys.)
+- [Frontend members] worked on:
+    - [Yuna and Adora] recipe screen polishing, receipt scanning interface draft
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>July 13th (Week 10)</summary>
 
 During the week of July 6th to July 13th:
