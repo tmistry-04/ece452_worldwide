@@ -1,6 +1,23 @@
 # P2: Weekly Updates
 
 <details>
+<summary>July 27th (Week 12)</summary>
+
+During the week of July 20th to July 27th:
+- [All members] worked on the final presentation slides and final report draft
+- [Backend members] worked on:
+    - [Tanisha] end-to-end testing on Android devices
+    - [Dhyey and Asel] bug fixes (Spoonacular API) and edge cases
+    - [Tony] stress/performance testing (see NFRs 3.1 and 3.2: Recipe suggestions shall load within 5 seconds on a standard WiFi connection, and receipt scanning shall extract items from a receipt within 5 seconds on standard Wifi connection)
+- [Frontend members] worked on:
+    - [Adora] finalized receipt scanning interface
+    - [Yuna] accessibility audit (per NFR 2.1: Color Contrasts must be in accordance with the Web Content Accessibility Guidelines (WCAG), font sizes shall be at least 16sp for Android app, clear fonts, no cursive for body-text.)
+
+Questions for Lesley and teaching team: 
+
+</details>
+
+<details>
 <summary>July 20th (Week 11)</summary>
 
 During the week of July 13th to July 20th:
