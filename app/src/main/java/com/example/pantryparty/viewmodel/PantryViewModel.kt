@@ -44,7 +44,7 @@ data class AddIngredientUiState(
  */
 class PantryViewModel(
     private val dao: PantryDao,
-    private val repository: SpoonacularRepository = SpoonacularRepositoryImpl
+    private val repository: SpoonacularRepository
 ) : ViewModel() {
 
     /** The pantry contents, kept hot while the UI is subscribed. */
@@ -63,14 +63,15 @@ class PantryViewModel(
 
     /** Debounced autocomplete: re-runs on each keystroke, cancelling the prior delay. */
     fun onQueryChange(query: String) {
-        _addState.update { it.copy(query = query) }
         autocompleteJob?.cancel()
-        // No lookups once an ingredient is chosen, or for very short queries.
-        // Also clears loading/error left behind by a lookup we just cancelled.
-        if (_addState.value.selected != null || query.trim().length < 2) {
-            _addState.update { it.copy(suggestions = emptyList(), loading = false, error = null) }
-            return
+        // No lookups once an ingredient is chosen, or for very short queries; that
+        // branch also clears loading/error left behind by a lookup just cancelled.
+        val searchable = _addState.value.selected == null && query.trim().length >= 2
+        _addState.update {
+            if (searchable) it.copy(query = query)
+            else it.copy(query = query, suggestions = emptyList(), loading = false, error = null)
         }
+        if (!searchable) return
         autocompleteJob = viewModelScope.launch {
             delay(DEBOUNCE_MS)
             _addState.update { it.copy(loading = true, error = null) }
@@ -123,9 +124,10 @@ class PantryViewModel(
                     spoonacularId = ingredient.id,
                     imageUrl = ingredient.image   // persist for thumbnails
                 )
-                // Same unit -> add to what's already on hand.
+                // Same unit -> add to what's already on hand (refreshing the image
+                // too, so both merge branches treat it the same way).
                 existing.unit == unit ->
-                    existing.copy(quantity = existing.quantity + qty)
+                    existing.copy(quantity = existing.quantity + qty, imageUrl = ingredient.image)
                 // Different unit -> adopt the newly entered unit/amount.
                 else -> existing.copy(quantity = qty, unit = unit, imageUrl = ingredient.image)
             }

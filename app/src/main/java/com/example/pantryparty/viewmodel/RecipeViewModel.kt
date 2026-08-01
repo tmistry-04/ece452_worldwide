@@ -64,7 +64,7 @@ data class ConsumeDraft(
  */
 class RecipeViewModel(
     private val dao: PantryDao,
-    private val repository: SpoonacularRepository = SpoonacularRepositoryImpl
+    private val repository: SpoonacularRepository
 ) : ViewModel() {
 
     /** Pantry snapshot driving the mode controls; kept hot while subscribed. */
@@ -103,6 +103,9 @@ class RecipeViewModel(
 
     private fun switchMode(mode: RecipeMode) {
         searchJob?.cancel()
+        // selectedIds is deliberately kept, so picks survive a round-trip through
+        // the other mode. Ids of since-deleted rows are harmless: searchSelected
+        // re-filters against the live pantry.
         _uiState.update {
             it.copy(
                 mode = mode,
@@ -180,7 +183,11 @@ class RecipeViewModel(
     /** Recipe details, reusing the per-search batch fetch when it's available. */
     private suspend fun recipeDetails(recipeId: Int): Result<RecipeInformation?> =
         detailsById[recipeId]?.let { Result.success(it) }
-            ?: repository.getRecipeInformationBulk(listOf(recipeId)).map { it.firstOrNull() }
+            ?: repository.getRecipeInformationBulk(listOf(recipeId)).map { infos ->
+                // Cache the one-off fetch too, so a second check on the same card
+                // (amounts, then "I made this") doesn't hit the API again.
+                infos.firstOrNull()?.also { detailsById = detailsById + (it.id to it) }
+            }
 
     // ---- Per-recipe actions (on-demand details fetch) ----
 
@@ -246,6 +253,9 @@ class RecipeViewModel(
                 // Re-read the row so a pantry edit made after the dialog opened
                 // (its plan holds a snapshot) can't be silently overwritten.
                 val current = dao.findBySpoonacularId(line.item.spoonacularId) ?: return@forEachIndexed
+                // If the unit changed too, the planned deduction is in the wrong
+                // unit and can't be converted — leave the row alone.
+                if (!RecipeMatcher.unitsMatch(current.unit, line.item.unit)) return@forEachIndexed
                 val remaining = current.quantity - deduct
                 if (remaining <= 0) dao.delete(current)
                 else dao.update(current.copy(quantity = remaining))

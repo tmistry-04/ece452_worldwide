@@ -65,6 +65,7 @@ import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.IngredientAutocomplete
 import com.example.pantryparty.ui.NetworkImage
 import com.example.pantryparty.ui.RecipeScreen
+import com.example.pantryparty.ui.StepperButton
 import com.example.pantryparty.ui.ingredientImageUrl
 import com.example.pantryparty.ui.theme.PantryPartyTheme
 import com.example.pantryparty.viewmodel.AddIngredientUiState
@@ -289,21 +290,6 @@ private fun PantryRow(
                 )
             }
         }
-    }
-}
-
-/**
- * +/- button used by the pantry stepper. IconButton gives the 48dp minimum
- * touch target plus button semantics/ripple for free.
- */
-@Composable
-private fun StepperButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = MaterialTheme.colorScheme.primary
-        )
     }
 }
 

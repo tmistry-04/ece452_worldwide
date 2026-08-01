@@ -8,8 +8,9 @@ import kotlinx.coroutines.awaitCancellation
 
 /**
  * Scriptable SpoonacularRepository: each test sets the result it wants returned.
- * The `hang*` flags park the call until it is cancelled, simulating a request
- * that is still in flight.
+ * Every endpoint is instrumented the same way — a call counter, the last
+ * arguments seen, and a `hang*` flag that parks the call until it is cancelled,
+ * simulating a request that is still in flight.
  */
 class FakeSpoonacularRepository : SpoonacularRepository {
 
@@ -19,14 +20,25 @@ class FakeSpoonacularRepository : SpoonacularRepository {
 
     var hangAutocomplete = false
     var hangRecipes = false
+    var hangDetails = false
 
     var autocompleteCalls = 0
         private set
+    var recipesCalls = 0
+        private set
+    var detailsCalls = 0
+        private set
+
+    var lastAutocompleteQuery: String? = null
+        private set
     var lastRecipeQuery: List<String>? = null
+        private set
+    var lastDetailsIds: List<Int>? = null
         private set
 
     override suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>> {
         autocompleteCalls++
+        lastAutocompleteQuery = query
         if (hangAutocomplete) awaitCancellation()
         return autocompleteResult
     }
@@ -35,11 +47,16 @@ class FakeSpoonacularRepository : SpoonacularRepository {
         names: List<String>,
         number: Int
     ): Result<List<RecipeByIngredient>> {
+        recipesCalls++
         lastRecipeQuery = names
         if (hangRecipes) awaitCancellation()
         return recipesResult
     }
 
-    override suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>> =
-        detailsResult
+    override suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>> {
+        detailsCalls++
+        lastDetailsIds = ids
+        if (hangDetails) awaitCancellation()
+        return detailsResult
+    }
 }

@@ -9,6 +9,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
+import java.io.IOException
 
 /**
  * Abstraction over the Spoonacular API so ViewModels can be unit-tested against
@@ -16,7 +17,7 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
  */
 interface SpoonacularRepository {
     suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>>
-    suspend fun findRecipesByIngredients(names: List<String>, number: Int = 20): Result<List<RecipeByIngredient>>
+    suspend fun findRecipesByIngredients(names: List<String>, number: Int): Result<List<RecipeByIngredient>>
     suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>>
 }
 
@@ -86,11 +87,13 @@ object SpoonacularRepositoryImpl : SpoonacularRepository {
     }
 }
 
-/** Maps API failures to user-readable text; auth and quota errors get clear hints. */
+/** Maps API failures to user-readable text; auth, quota, and network errors get clear hints. */
 fun friendlyApiError(t: Throwable): String = when {
     t is HttpException && t.code() == 401 ->
         "Spoonacular rejected the API key — set SPOONACULAR_API_KEY in local.properties."
     t is HttpException && t.code() == 402 ->
         "Daily Spoonacular quota reached — try again after the daily reset or add a new API key."
+    t is IOException ->
+        "Couldn't reach Spoonacular — check your internet connection and try again."
     else -> "Error: ${t.message}"
 }

@@ -108,6 +108,31 @@ class RecipeViewModelTest {
         assertNull(ui.error)                   // cancellation is not an error
     }
 
+    /** Regression: a one-off details fetch is cached for the next check on the same card. */
+    @Test
+    fun recipeDetails_oneOffFetchIsCachedForLaterChecks() = runTest {
+        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        repo.detailsResult = Result.success(
+            listOf(
+                RecipeInformation(
+                    id = 10, title = "Omelette",
+                    extendedIngredients = listOf(
+                        ExtendedIngredient(id = 1, name = "egg", amount = 2.0, unit = "piece")
+                    )
+                )
+            )
+        )
+        val vm = startViewModel()
+
+        vm.checkAmounts(10)
+        advanceUntilIdle()
+        assertEquals(1, repo.detailsCalls)
+
+        vm.prepareConsume(10)
+        advanceUntilIdle()
+        assertEquals(1, repo.detailsCalls)   // second check served from the cache
+    }
+
     // --- "I made this" deduction --------------------------------------------
 
     @Test
@@ -141,6 +166,35 @@ class RecipeViewModelTest {
         assertEquals(listOf("butter"), remaining.map { it.name })  // egg used up -> deleted
         assertEquals(4, remaining.single().quantity)
         assertNull(vm.cardStates.value[10]?.consume)               // dialog closed
+    }
+
+    /** Regression: a unit change while the dialog is open must not be deducted against. */
+    @Test
+    fun confirmConsume_skipsRowsWhoseUnitChangedMeanwhile() = runTest {
+        dao.seed(PantryItem(name = "butter", quantity = 5, unit = "tbsp", spoonacularId = 2))
+        repo.detailsResult = Result.success(
+            listOf(
+                RecipeInformation(
+                    id = 10, title = "Toast",
+                    extendedIngredients = listOf(
+                        ExtendedIngredient(id = 2, name = "butter", amount = 1.0, unit = "tbsp")
+                    )
+                )
+            )
+        )
+        val vm = startViewModel()
+        vm.prepareConsume(10)
+        advanceUntilIdle()
+
+        // While the dialog is open the row is re-saved in a different unit.
+        dao.upsert(dao.snapshot().single().copy(quantity = 500, unit = "g"))
+
+        vm.confirmConsume(10)
+        advanceUntilIdle()
+
+        val row = dao.snapshot().single()
+        assertEquals(500, row.quantity)   // untouched: a tbsp deduction can't apply to grams
+        assertEquals("g", row.unit)
     }
 
     @Test
