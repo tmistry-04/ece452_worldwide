@@ -488,10 +488,13 @@ private fun ConsumeLineRow(
     }
 }
 
-/** Small +/- button used by the "I made this" deduction steppers. */
+/**
+ * +/- button used by the "I made this" deduction steppers. Default IconButton
+ * size keeps the 48dp minimum touch target; only the icon is drawn smaller.
+ */
 @Composable
 private fun DialogStepper(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(32.dp)) {
+    IconButton(onClick = onClick, enabled = enabled) {
         Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
     }
 }

@@ -9,6 +9,8 @@ import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.IngredientAutocomplete
 import com.example.pantryparty.network.SpoonacularRepository
+import com.example.pantryparty.network.SpoonacularRepositoryImpl
+import com.example.pantryparty.network.friendlyApiError
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +42,10 @@ data class AddIngredientUiState(
  * Owns the Pantry tab's state and pantry mutations. The UI observes [pantry] and
  * [addState] and forwards events here; no composable touches the DAO directly.
  */
-class PantryViewModel(private val dao: PantryDao) : ViewModel() {
+class PantryViewModel(
+    private val dao: PantryDao,
+    private val repository: SpoonacularRepository = SpoonacularRepositoryImpl
+) : ViewModel() {
 
     /** The pantry contents, kept hot while the UI is subscribed. */
     val pantry: StateFlow<List<PantryItem>> =
@@ -61,16 +66,17 @@ class PantryViewModel(private val dao: PantryDao) : ViewModel() {
         _addState.update { it.copy(query = query) }
         autocompleteJob?.cancel()
         // No lookups once an ingredient is chosen, or for very short queries.
+        // Also clears loading/error left behind by a lookup we just cancelled.
         if (_addState.value.selected != null || query.trim().length < 2) {
-            _addState.update { it.copy(suggestions = emptyList()) }
+            _addState.update { it.copy(suggestions = emptyList(), loading = false, error = null) }
             return
         }
         autocompleteJob = viewModelScope.launch {
-            delay(300)
+            delay(DEBOUNCE_MS)
             _addState.update { it.copy(loading = true, error = null) }
-            SpoonacularRepository.autocompleteIngredients(query.trim())
+            repository.autocompleteIngredients(query.trim())
                 .onSuccess { result -> _addState.update { it.copy(suggestions = result, loading = false) } }
-                .onFailure { e -> _addState.update { it.copy(error = e.message, loading = false) } }
+                .onFailure { e -> _addState.update { it.copy(error = friendlyApiError(e), loading = false) } }
         }
     }
 
@@ -130,14 +136,14 @@ class PantryViewModel(private val dao: PantryDao) : ViewModel() {
 
     /** Bump the count by one. */
     fun increment(item: PantryItem) {
-        viewModelScope.launch { dao.upsert(item.copy(quantity = item.quantity + 1)) }
+        viewModelScope.launch { dao.update(item.copy(quantity = item.quantity + 1)) }
     }
 
     /** Decrement; using the last one removes the row entirely. */
     fun decrement(item: PantryItem) {
         viewModelScope.launch {
             if (item.quantity <= 1) dao.delete(item)
-            else dao.upsert(item.copy(quantity = item.quantity - 1))
+            else dao.update(item.copy(quantity = item.quantity - 1))
         }
     }
 
@@ -146,9 +152,15 @@ class PantryViewModel(private val dao: PantryDao) : ViewModel() {
     }
 
     companion object {
-        /** Factory that injects the [dao] (no DI framework in the project). */
-        fun factory(dao: PantryDao): ViewModelProvider.Factory = viewModelFactory {
-            initializer { PantryViewModel(dao) }
+        /** Debounce window between the last keystroke and the autocomplete call. */
+        const val DEBOUNCE_MS = 300L
+
+        /** Factory that injects the dependencies (no DI framework in the project). */
+        fun factory(
+            dao: PantryDao,
+            repository: SpoonacularRepository = SpoonacularRepositoryImpl
+        ): ViewModelProvider.Factory = viewModelFactory {
+            initializer { PantryViewModel(dao, repository) }
         }
     }
 }

@@ -3,12 +3,20 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
 }
 
 val localProperties = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) load(f.inputStream())
+}
+
+// Empty (rather than the literal string "null") when unset, so a fresh clone can
+// still build and run unit tests; API calls will fail with a clear 401 message.
+val spoonacularApiKey = localProperties.getProperty("SPOONACULAR_API_KEY") ?: ""
+if (spoonacularApiKey.isBlank()) {
+    logger.warn("WARNING: SPOONACULAR_API_KEY is not set in local.properties — Spoonacular calls will fail. Get a key at https://spoonacular.com/food-api")
 }
 
 android {
@@ -23,6 +31,7 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "SPOONACULAR_API_KEY", "\"$spoonacularApiKey\"")
     }
 
     buildTypes {
@@ -30,10 +39,6 @@ android {
             optimization {
                 enable = false
             }
-            buildConfigField("String", "SPOONACULAR_API_KEY", "\"${localProperties["SPOONACULAR_API_KEY"]}\"")
-        }
-        debug {
-            buildConfigField("String", "SPOONACULAR_API_KEY", "\"${localProperties["SPOONACULAR_API_KEY"]}\"")
         }
     }
     compileOptions {
@@ -63,10 +68,11 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.retrofit)
-    implementation(libs.retrofit.converter.gson)
+    implementation(libs.retrofit.converter.kotlinx.serialization)
     implementation(libs.okhttp.logging)
-    implementation(libs.gson)
+    implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
