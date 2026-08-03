@@ -143,7 +143,7 @@ private fun DateField(
 
 /** Digits-only text field used for every amount entry in the pantry dialogs. */
 @Composable
-private fun AmountField(
+internal fun AmountField(
     value: String,
     onChange: (String) -> Unit,
     label: String,
@@ -472,31 +472,43 @@ private fun EditorSearchStep(
         CircularProgressIndicator(modifier = Modifier.size(24.dp))
     }
     state.suggestions.forEach { suggestion ->
-        Row(
+        IngredientSuggestionRow(suggestion, onClick = { onSelectSuggestion(suggestion) })
+    }
+}
+
+/**
+ * One tappable autocomplete result: thumbnail, name, aisle. Shared by the item editor
+ * and the receipt-scan review screen so a suggestion looks the same wherever it's picked.
+ */
+@Composable
+internal fun IngredientSuggestionRow(
+    suggestion: IngredientAutocomplete,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        NetworkImage(
+            url = ingredientImageUrl(suggestion.image),
+            contentDescription = suggestion.name,
             modifier = Modifier
-                .fillMaxWidth()
+                .size(36.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .clickable { onSelectSuggestion(suggestion) }
-                .padding(vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            NetworkImage(
-                url = ingredientImageUrl(suggestion.image),
-                contentDescription = suggestion.name,
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(8.dp))
-            )
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text(titleCase(suggestion.name))
-                suggestion.aisle?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(titleCase(suggestion.name))
+            suggestion.aisle?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

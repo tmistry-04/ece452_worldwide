@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
@@ -74,6 +75,56 @@ interface PantryDao {
     /** Clears one item's entire history (its stock drops to zero). */
     @Query("DELETE FROM pantry_transactions WHERE catalogItemId = :itemId")
     suspend fun clearTransactions(itemId: Long)
+
+    /**
+     * Records a purchase for an ingredient, creating its catalog row if this is the
+     * first time it's been bought. Returns the catalog row id the lot was filed under.
+     *
+     * Receipt scanning adds many items at once, and a catalog row without its lot (or
+     * a lot without its row) is a broken pantry entry — so the find-or-create and the
+     * ledger insert are one transaction rather than two independent writes.
+     *
+     * Merging on [spoonacularId] rather than inserting blindly is required, not just
+     * tidy: `catalog_items` has a unique index on that column, so a second purchase of
+     * the same ingredient would otherwise fail outright.
+     *
+     * Has a body rather than being abstract so the in-memory test fake inherits the
+     * same find-or-create semantics for free.
+     */
+    @Transaction
+    suspend fun recordPurchase(
+        spoonacularId: Int,
+        name: String,
+        unit: String,
+        quantity: Int,
+        dateEpochDay: Long,
+        imageUrl: String? = null,
+        aisle: String? = null,
+        expiry: Long? = null
+    ): Long {
+        val existing = findBySpoonacularId(spoonacularId)
+        val itemId = existing?.id ?: insertItem(
+            CatalogItem(
+                name = name,
+                // The first purchase sets the target: "keep as much as I just bought".
+                desiredAmount = quantity,
+                spoonacularId = spoonacularId,
+                imageUrl = imageUrl,
+                sortOrder = nextSortOrder(),
+                unit = unit,
+                aisle = aisle
+            )
+        )
+        insertTransaction(
+            PantryTransaction(
+                catalogItemId = itemId,
+                date = dateEpochDay,
+                amountBought = quantity,
+                expiry = expiry
+            )
+        )
+        return itemId
+    }
 
     // ---- staples ("always have") -------------------------------------------
 

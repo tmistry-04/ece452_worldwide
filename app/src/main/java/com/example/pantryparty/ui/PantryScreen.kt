@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.AddShoppingCart
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
@@ -88,6 +89,10 @@ fun PantryScreen(dao: PantryDao) {
     // Purely visual confirmation step, so it stays local UI state.
     var confirmDeleteItem by remember { mutableStateOf<CatalogItem?>(null) }
 
+    // The scan flow owns its own ViewModel and dies with the dialog, so whether it's
+    // open is just UI state here.
+    var scanning by remember { mutableStateOf(false) }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -101,6 +106,22 @@ fun PantryScreen(dao: PantryDao) {
                 itemCount = rows.size,
                 onToggleEditMode = viewModel::toggleEditMode
             )
+        }
+
+        // Scanning stocks the pantry, so it belongs with the everyday actions rather
+        // than behind edit mode — but edit mode is about arranging the catalog, so it
+        // steps out of the way there.
+        if (!editMode) {
+            item(key = "scan-receipt") {
+                FilledTonalButton(
+                    onClick = { scanning = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.PhotoCamera, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Scan a receipt")
+                }
+            }
         }
 
         if (editMode) {
@@ -226,6 +247,10 @@ fun PantryScreen(dao: PantryDao) {
             onClearHistory = { viewModel.clearHistory(detailUi.row.item) },
             onDismiss = viewModel::closeDetail
         )
+    }
+
+    if (scanning) {
+        ReceiptScanDialog(dao = dao, onDismiss = { scanning = false })
     }
 
     confirmDeleteItem?.let { item ->

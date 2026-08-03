@@ -15,6 +15,15 @@ import kotlinx.coroutines.awaitCancellation
 class FakeSpoonacularRepository : SpoonacularRepository {
 
     var autocompleteResult: Result<List<IngredientAutocomplete>> = Result.success(emptyList())
+
+    /**
+     * Per-query autocomplete answers, consulted before [autocompleteResult].
+     *
+     * Receipt scanning issues one lookup per receipt line plus fallbacks, so its tests
+     * need different answers for different queries rather than one blanket result.
+     * Leave it null and [autocompleteResult] behaves exactly as before.
+     */
+    var autocompleteHandler: ((String) -> Result<List<IngredientAutocomplete>>)? = null
     var recipesResult: Result<List<RecipeByIngredient>> = Result.success(emptyList())
     var detailsResult: Result<List<RecipeInformation>> = Result.success(emptyList())
 
@@ -31,6 +40,9 @@ class FakeSpoonacularRepository : SpoonacularRepository {
 
     var lastAutocompleteQuery: String? = null
         private set
+
+    /** Every autocomplete query seen, in order — receipt scanning issues many per scan. */
+    val autocompleteQueries = mutableListOf<String>()
     var lastRecipeQuery: List<String>? = null
         private set
     var lastDetailsIds: List<Int>? = null
@@ -39,8 +51,9 @@ class FakeSpoonacularRepository : SpoonacularRepository {
     override suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>> {
         autocompleteCalls++
         lastAutocompleteQuery = query
+        autocompleteQueries += query
         if (hangAutocomplete) awaitCancellation()
-        return autocompleteResult
+        return autocompleteHandler?.invoke(query) ?: autocompleteResult
     }
 
     override suspend fun findRecipesByIngredients(
