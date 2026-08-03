@@ -1,7 +1,10 @@
 package com.example.pantryparty.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -93,68 +96,71 @@ fun PantryScreen(dao: PantryDao) {
     // open is just UI state here.
     var scanning by remember { mutableStateOf(false) }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(vertical = 16.dp)
-    ) {
-        item(key = "header") {
-            PantryHeader(
-                editMode = editMode,
-                itemCount = rows.size,
-                onToggleEditMode = viewModel::toggleEditMode
-            )
-        }
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp)
+        ) {
+            item(key = "header") {
+                PantryHeader(
+                    editMode = editMode,
+                    itemCount = rows.size,
+                    onToggleEditMode = viewModel::toggleEditMode
+                )
+            }
 
-        // Scanning stocks the pantry, so it belongs with the everyday actions rather
-        // than behind edit mode — but edit mode is about arranging the catalog, so it
-        // steps out of the way there.
-        if (!editMode) {
-            item(key = "scan-receipt") {
-                FilledTonalButton(
-                    onClick = { scanning = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.PhotoCamera, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Scan a receipt")
+            // Scanning stocks the pantry, so it belongs with the everyday actions rather
+            // than behind edit mode — but edit mode is about arranging the catalog, so it
+            // steps out of the way there.
+            if (!editMode) {
+                item(key = "scan-receipt") {
+                    FilledTonalButton(
+                        onClick = { scanning = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.PhotoCamera, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scan a receipt")
+                    }
                 }
             }
-        }
 
-        if (editMode) {
-            item(key = "add-item") {
-                FilledTonalButton(
-                    onClick = viewModel::openAddItem,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Add item")
+            if (editMode) {
+                item(key = "add-item") {
+                    FilledTonalButton(
+                        onClick = viewModel::openAddItem,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add item")
+                    }
+                }
+                item(key = "staples") {
+                    FilledTonalButton(
+                        onClick = viewModel::openStaples,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Check, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (staples.isEmpty()) "Always have…"
+                            else "Always have (${staples.size})"
+                        )
+                    }
                 }
             }
-            item(key = "staples") {
-                FilledTonalButton(
-                    onClick = viewModel::openStaples,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Filled.Check, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (staples.isEmpty()) "Always have…"
-                        else "Always have (${staples.size})"
-                    )
-                }
-            }
-        }
 
-        if (rows.isEmpty()) {
-            item(key = "empty") { EmptyPantryHint(editMode) }
-        } else {
-            itemsIndexed(rows, key = { _, row -> row.item.id }) { index, row ->
-                if (editMode) {
+            if (rows.isEmpty()) {
+                item(key = "empty") { EmptyPantryHint(editMode) }
+            } else if (editMode) {
+                // Edit mode stays a single flat list: the up/down arrows are driven by
+                // position in `rows`, so splitting it into sections would make an item
+                // "move up" into a group it doesn't belong to.
+                itemsIndexed(rows, key = { _, row -> row.item.id }) { index, row ->
                     EditableRow(
                         row = row,
                         isFirst = index == 0,
@@ -164,18 +170,58 @@ fun PantryScreen(dao: PantryDao) {
                         onEdit = { viewModel.openEditItem(row.item) },
                         onDelete = { confirmDeleteItem = row.item }
                     )
-                } else {
-                    SwipeablePantryRow(
-                        row = row,
-                        onBuy = { viewModel.openBuy(row.item) },
-                        onUse = { viewModel.openUse(row.item) },
-                        onClick = { viewModel.openDetail(row.item) }
-                    )
+                }
+            } else {
+                // Anything expiring, expired, or out of stock floats to the top —
+                // the whole point of the app is to surface what needs using now.
+                val (urgent, stocked) = rows.partition { it.expiry.hasWarning || it.stock == 0 }
+
+                if (urgent.isNotEmpty()) {
+                    item(key = "urgent-header") {
+                        SectionHeader(
+                            text = "Use these soon · ${urgent.size} " +
+                                    if (urgent.size == 1) "item" else "items",
+                            urgent = true
+                        )
+                    }
+                    items(urgent, key = { it.item.id }) { row ->
+                        SwipeablePantryRow(
+                            row = row,
+                            onBuy = { viewModel.openBuy(row.item) },
+                            onUse = { viewModel.openUse(row.item) },
+                            onClick = { viewModel.openDetail(row.item) }
+                        )
+                    }
+                }
+
+                if (stocked.isNotEmpty()) {
+                    item(key = "stocked-header") {
+                        SectionHeader(text = "Stocked", urgent = false)
+                    }
+                    items(stocked, key = { it.item.id }) { row ->
+                        SwipeablePantryRow(
+                            row = row,
+                            onBuy = { viewModel.openBuy(row.item) },
+                            onUse = { viewModel.openUse(row.item) },
+                            onClick = { viewModel.openDetail(row.item) }
+                        )
+                    }
                 }
             }
         }
+        if (!editMode) {
+            FloatingActionButton(
+                onClick = viewModel::openAddItem,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp)
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "Add item")
+            }
+        }
     }
-
     // ---- dialogs & modals (each shows only while its draft/state is open) ----
 
     stapleEditor?.let { state ->
@@ -287,9 +333,8 @@ private fun PantryHeader(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                "My Pantry",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+                "Pantry",
+                style = MaterialTheme.typography.displaySmall
             )
             Text(
                 when {
@@ -313,6 +358,39 @@ private fun PantryHeader(
                 Spacer(Modifier.width(6.dp))
                 Text("Edit")
             }
+        }
+    }
+}
+
+/**
+ * Divider between the two row groups. The urgent variant gets the brand tomato
+ * plus a warning glyph; the neutral one is a quiet all-caps label so it recedes.
+ */
+@Composable
+private fun SectionHeader(text: String, urgent: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+    ) {
+        if (urgent) {
+            Icon(
+                Icons.Filled.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else {
+            Text(
+                text.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -484,8 +562,11 @@ private fun StockProgressLine(row: PantryRowUi) {
                 .weight(1f)
                 .height(6.dp)
                 .clip(RoundedCornerShape(3.dp)),
-            color = if (row.stock == 0) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.primary,
+            color = when {
+                row.stock == 0 -> MaterialTheme.colorScheme.error
+                row.stock >= desired -> MaterialTheme.colorScheme.secondary
+                else -> MaterialTheme.colorScheme.tertiary
+            },
             trackColor = MaterialTheme.colorScheme.surfaceVariant
         )
         Spacer(Modifier.width(10.dp))
