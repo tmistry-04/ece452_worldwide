@@ -6,18 +6,20 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.pantryparty.data.PantryDao
-import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.network.SpoonacularRepositoryImpl
 import com.example.pantryparty.network.friendlyApiError
+import com.example.pantryparty.pantry.PantryMath
+import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,13 +69,23 @@ class RecipeViewModel(
     private val repository: SpoonacularRepository
 ) : ViewModel() {
 
-    /** Pantry snapshot driving the mode controls; kept hot while subscribed. */
-    val pantry: StateFlow<List<PantryItem>> =
-        dao.observeAll().stateIn(
+    /**
+     * The pantry as the recipe finder sees it: catalog items with their stock
+     * computed from the transaction ledger; items with nothing on hand are
+     * omitted (you can't cook with them). Kept hot while subscribed.
+     */
+    val pantry: StateFlow<List<StockItem>> =
+        combine(dao.observeCatalog(), dao.observeTransactions()) { catalog, txns ->
+            PantryMath.stockSnapshot(catalog, txns)
+        }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = emptyList()
         )
+
+    /** One-shot equivalent of [pantry] for the on-demand checks. */
+    private suspend fun stockSnapshot(): List<StockItem> =
+        PantryMath.stockSnapshot(dao.getCatalog(), dao.getTransactions())
 
     private val _uiState = MutableStateFlow(RecipeUiState())
     val uiState: StateFlow<RecipeUiState> = _uiState.asStateFlow()
@@ -205,7 +217,7 @@ class RecipeViewModel(
     fun checkAmounts(recipeId: Int) {
         viewModelScope.launch {
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
-            val pantrySnapshot = dao.getAll()
+            val pantrySnapshot = stockSnapshot()
             val nonStaple = nonStapleIds(recipeId)
             recipeDetails(recipeId)
                 .onSuccess { info ->
@@ -220,7 +232,7 @@ class RecipeViewModel(
     fun prepareConsume(recipeId: Int) {
         viewModelScope.launch {
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
-            val pantrySnapshot = dao.getAll()
+            val pantrySnapshot = stockSnapshot()
             val nonStaple = nonStapleIds(recipeId)
             recipeDetails(recipeId)
                 .onSuccess { info ->
@@ -243,22 +255,23 @@ class RecipeViewModel(
         card.copy(consume = draft.copy(amounts = amounts))
     }
 
-    /** Applies the user-chosen deductions to the pantry, then closes the dialog. */
+    /** Records the user-chosen deductions as "used" in the ledger, then closes the dialog. */
     fun confirmConsume(recipeId: Int) {
         val draft = _cardStates.value[recipeId]?.consume ?: return
         viewModelScope.launch {
             draft.plan.lines.forEachIndexed { i, line ->
                 val deduct = draft.amounts.getOrElse(i) { 0 }
                 if (deduct <= 0) return@forEachIndexed
-                // Re-read the row so a pantry edit made after the dialog opened
-                // (its plan holds a snapshot) can't be silently overwritten.
+                // Re-read the item so a catalog edit made after the dialog opened
+                // (its plan holds a snapshot) can't be silently misapplied.
                 val current = dao.findBySpoonacularId(line.item.spoonacularId) ?: return@forEachIndexed
                 // If the unit changed too, the planned deduction is in the wrong
-                // unit and can't be converted — leave the row alone.
+                // unit and can't be converted — leave the item alone.
                 if (!RecipeMatcher.unitsMatch(current.unit, line.item.unit)) return@forEachIndexed
-                val remaining = current.quantity - deduct
-                if (remaining <= 0) dao.delete(current)
-                else dao.update(current.copy(quantity = remaining))
+                // Cooking consumes the oldest stock first.
+                for ((lot, take) in PantryMath.fifoPlan(dao.transactionsFor(current.id), deduct)) {
+                    dao.updateTransaction(lot.copy(amountUsed = lot.amountUsed + take))
+                }
             }
         }
         updateCard(recipeId) { it.copy(consume = null) }

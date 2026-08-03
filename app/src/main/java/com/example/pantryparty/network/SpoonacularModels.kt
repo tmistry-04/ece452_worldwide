@@ -54,7 +54,7 @@ data class RecipeInformation(
     val extendedIngredients: List<ExtendedIngredient> = emptyList()
 )
 
-/** A required ingredient with its amount/unit; `id` matches PantryItem.spoonacularId. */
+/** A required ingredient with its amount/unit; `id` matches CatalogItem.spoonacularId. */
 @Serializable
 data class ExtendedIngredient(
     val id: Int,

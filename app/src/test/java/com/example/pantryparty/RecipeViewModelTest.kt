@@ -1,6 +1,7 @@
 package com.example.pantryparty
 
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.data.CatalogItem
+import com.example.pantryparty.data.PantryTransaction
 import com.example.pantryparty.fakes.FakePantryDao
 import com.example.pantryparty.fakes.FakeSpoonacularRepository
 import com.example.pantryparty.network.ExtendedIngredient
@@ -43,6 +44,17 @@ class RecipeViewModelTest {
         return vm
     }
 
+    /** Catalogs the ingredient and, when [stock] > 0, buys one lot of it. */
+    private fun seedStock(name: String, stock: Int, unit: String, spoonacularId: Int): CatalogItem {
+        val item = dao.seedItems(
+            CatalogItem(name = name, desiredAmount = stock, spoonacularId = spoonacularId, sortOrder = 0, unit = unit)
+        ).single()
+        if (stock > 0) {
+            dao.seedTransactions(PantryTransaction(catalogItemId = item.id, date = 100, amountBought = stock))
+        }
+        return item
+    }
+
     private fun brief(id: Int) =
         RecipeIngredientBrief(id = id, name = "i$id", amount = 1.0, unit = "g")
 
@@ -51,11 +63,27 @@ class RecipeViewModelTest {
         missedIngredients = List(missed) { brief(id * 100 + it) }
     )
 
+    // --- the pantry snapshot -------------------------------------------------
+
+    @Test
+    fun pantry_reflectsLedgerStock_andOmitsZeroStockItems() = runTest {
+        val egg = seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        dao.seedTransactions(
+            PantryTransaction(catalogItemId = egg.id, date = 101, amountBought = 2, amountUsed = 2)
+        )
+        seedStock("milk", stock = 0, unit = "l", spoonacularId = 2)   // catalogued, none on hand
+        val vm = startViewModel()
+
+        val snapshot = vm.pantry.value
+        assertEquals(listOf("egg"), snapshot.map { it.name })
+        assertEquals(6, snapshot.single().quantity)   // 6 + (2 bought − 2 used)
+    }
+
     // --- searching -----------------------------------------------------------
 
     @Test
     fun search_bucketsSortsAndDropsBeyondMaxMissing() = runTest {
-        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.recipesResult = Result.success(
             listOf(searchResult(1, missed = 2), searchResult(2, missed = 4), searchResult(3, missed = 0))
         )
@@ -74,7 +102,7 @@ class RecipeViewModelTest {
 
     @Test
     fun quotaFailure_showsTheFriendlyMessage() = runTest {
-        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.recipesResult = Result.failure(
             HttpException(Response.error<Any>(402, "".toResponseBody()))
         )
@@ -91,7 +119,7 @@ class RecipeViewModelTest {
     /** Regression: switching modes must cancel an in-flight search. */
     @Test
     fun switchingMode_cancelsAnInFlightSearch() = runTest {
-        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.hangRecipes = true
         val vm = startViewModel()
 
@@ -111,7 +139,7 @@ class RecipeViewModelTest {
     /** Regression: a one-off details fetch is cached for the next check on the same card. */
     @Test
     fun recipeDetails_oneOffFetchIsCachedForLaterChecks() = runTest {
-        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.detailsResult = Result.success(
             listOf(
                 RecipeInformation(
@@ -136,11 +164,9 @@ class RecipeViewModelTest {
     // --- "I made this" deduction --------------------------------------------
 
     @Test
-    fun confirmConsume_deductsAndRemovesEmptiedRows() = runTest {
-        dao.seed(
-            PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1),
-            PantryItem(name = "butter", quantity = 5, unit = "tbsp", spoonacularId = 2)
-        )
+    fun confirmConsume_recordsUseInTheLedger_andEmptiedItemsLeaveTheSnapshot() = runTest {
+        val egg = seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
+        seedStock("butter", stock = 5, unit = "tbsp", spoonacularId = 2)
         repo.detailsResult = Result.success(
             listOf(
                 RecipeInformation(
@@ -162,16 +188,48 @@ class RecipeViewModelTest {
         vm.confirmConsume(10)
         advanceUntilIdle()
 
-        val remaining = dao.snapshot()
-        assertEquals(listOf("butter"), remaining.map { it.name })  // egg used up -> deleted
-        assertEquals(4, remaining.single().quantity)
+        // The catalog keeps both items; only the ledger changed.
+        assertEquals(2, dao.itemsSnapshot().size)
+        val eggLot = dao.transactionsSnapshot().single { it.catalogItemId == egg.id }
+        assertEquals(2, eggLot.amountUsed)
+        // Emptied egg drops out of the cookable snapshot; butter is down to 4.
+        assertEquals(listOf("butter"), vm.pantry.value.map { it.name })
+        assertEquals(4, vm.pantry.value.single().quantity)
         assertNull(vm.cardStates.value[10]?.consume)               // dialog closed
+    }
+
+    @Test
+    fun confirmConsume_splitsAcrossLotsOldestFirst() = runTest {
+        val egg = seedStock("egg", stock = 3, unit = "piece", spoonacularId = 1)   // lot at date 100
+        val newer = dao.seedTransactions(
+            PantryTransaction(catalogItemId = egg.id, date = 200, amountBought = 3)
+        ).single()
+        repo.detailsResult = Result.success(
+            listOf(
+                RecipeInformation(
+                    id = 10, title = "Big omelette",
+                    extendedIngredients = listOf(
+                        ExtendedIngredient(id = 1, name = "egg", amount = 4.0, unit = "piece")
+                    )
+                )
+            )
+        )
+        val vm = startViewModel()
+
+        vm.prepareConsume(10)
+        advanceUntilIdle()
+        vm.confirmConsume(10)
+        advanceUntilIdle()
+
+        val lots = dao.transactionsSnapshot().sortedBy { it.date }
+        assertEquals(3, lots.first().amountUsed)             // oldest lot drained first
+        assertEquals(1, lots.single { it.id == newer.id }.amountUsed)
     }
 
     /** Regression: a unit change while the dialog is open must not be deducted against. */
     @Test
-    fun confirmConsume_skipsRowsWhoseUnitChangedMeanwhile() = runTest {
-        dao.seed(PantryItem(name = "butter", quantity = 5, unit = "tbsp", spoonacularId = 2))
+    fun confirmConsume_skipsItemsWhoseUnitChangedMeanwhile() = runTest {
+        val butter = seedStock("butter", stock = 5, unit = "tbsp", spoonacularId = 2)
         repo.detailsResult = Result.success(
             listOf(
                 RecipeInformation(
@@ -186,20 +244,19 @@ class RecipeViewModelTest {
         vm.prepareConsume(10)
         advanceUntilIdle()
 
-        // While the dialog is open the row is re-saved in a different unit.
-        dao.upsert(dao.snapshot().single().copy(quantity = 500, unit = "g"))
+        // While the dialog is open the item is re-saved in a different unit.
+        dao.updateItem(butter.copy(unit = "g"))
 
         vm.confirmConsume(10)
         advanceUntilIdle()
 
-        val row = dao.snapshot().single()
-        assertEquals(500, row.quantity)   // untouched: a tbsp deduction can't apply to grams
-        assertEquals("g", row.unit)
+        // Untouched: a tbsp deduction can't apply to grams.
+        assertEquals(0, dao.transactionsSnapshot().single().amountUsed)
     }
 
     @Test
     fun adjustConsume_clampsToWhatIsOnHand() = runTest {
-        dao.seed(PantryItem(name = "egg", quantity = 2, unit = "piece", spoonacularId = 1))
+        seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.detailsResult = Result.success(
             listOf(
                 RecipeInformation(

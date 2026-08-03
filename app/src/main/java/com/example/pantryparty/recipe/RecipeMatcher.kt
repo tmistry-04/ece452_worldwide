@@ -1,6 +1,6 @@
 package com.example.pantryparty.recipe
 
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.network.ExtendedIngredient
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
@@ -8,7 +8,7 @@ import com.example.pantryparty.network.RecipeInformation
 /** An ingredient the user has, linked to the pantry row that satisfies it. */
 data class MatchedIngredient(
     val required: ExtendedIngredient,
-    val pantryItem: PantryItem
+    val pantryItem: StockItem
 )
 
 /** An ingredient the user lacks (absent) or doesn't have enough of (short). */
@@ -48,7 +48,7 @@ object RecipeMatcher {
      * own via [staplesOf]. Pass null to check every ingredient.
      */
     fun match(
-        pantry: List<PantryItem>,
+        pantry: List<StockItem>,
         recipe: RecipeInformation,
         nonStapleIds: Set<Int>? = null
     ): RecipeMatch {
@@ -109,7 +109,7 @@ object RecipeMatcher {
      * same-unit duplicates have their quantities summed; if the units disagree there
      * is no safe way to combine, so the first row wins. Shared with [PantryConsumer].
      */
-    internal fun indexByIngredient(pantry: List<PantryItem>): Map<Int, PantryItem> =
+    internal fun indexByIngredient(pantry: List<StockItem>): Map<Int, StockItem> =
         pantry.groupBy { it.spoonacularId }.mapValues { (_, rows) ->
             rows.reduce { acc, row ->
                 if (unitsMatch(acc.unit, row.unit)) acc.copy(quantity = acc.quantity + row.quantity)

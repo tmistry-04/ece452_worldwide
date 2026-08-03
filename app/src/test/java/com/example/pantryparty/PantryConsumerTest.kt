@@ -1,6 +1,6 @@
 package com.example.pantryparty
 
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.network.ExtendedIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.recipe.PantryConsumer
@@ -13,7 +13,7 @@ class PantryConsumerTest {
     // --- helpers --------------------------------------------------------------
 
     private fun pantry(id: Int, qty: Int, unit: String, name: String = "x") =
-        PantryItem(id = id.toLong(), name = name, quantity = qty, unit = unit, spoonacularId = id)
+        StockItem(id = id.toLong(), spoonacularId = id, name = name, unit = unit, quantity = qty)
 
     private fun ing(id: Int, amount: Double, unit: String, name: String = "x") =
         ExtendedIngredient(id = id, name = name, amount = amount, unit = unit, original = null, measures = null)

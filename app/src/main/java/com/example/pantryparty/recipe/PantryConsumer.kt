@@ -1,6 +1,6 @@
 package com.example.pantryparty.recipe
 
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.network.RecipeInformation
 import kotlin.math.roundToInt
 
@@ -10,7 +10,7 @@ import kotlin.math.roundToInt
  * dialog (in whole units) before anything is written to the pantry.
  */
 data class ConsumeLine(
-    val item: PantryItem,
+    val item: StockItem,
     val suggested: Int,   // prefill in pantry units, clamped to what's on hand
     val unit: String
 )
@@ -49,7 +49,7 @@ object PantryConsumer {
      * every ingredient.
      */
     fun plan(
-        pantry: List<PantryItem>,
+        pantry: List<StockItem>,
         recipe: RecipeInformation,
         nonStapleIds: Set<Int>? = null
     ): ConsumePlan {

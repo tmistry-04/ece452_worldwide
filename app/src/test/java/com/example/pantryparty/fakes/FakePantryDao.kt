@@ -1,49 +1,99 @@
 package com.example.pantryparty.fakes
 
+import com.example.pantryparty.data.CatalogItem
 import com.example.pantryparty.data.PantryDao
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.data.PantryTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * In-memory PantryDao mirroring the Room semantics the app relies on: rows are
- * kept sorted by name, ids auto-generate from 1, and upsert REPLACEs any row
- * with the same id or the same (unique-indexed) spoonacularId.
+ * In-memory PantryDao mirroring the Room semantics the app relies on: catalog
+ * rows come back ordered by (sortOrder, id), transactions by (date, id), ids
+ * auto-generate from 1, and deleting an item cascades to its transactions
+ * (like the schema's onDelete = CASCADE).
  */
 class FakePantryDao : PantryDao {
 
-    private val items = MutableStateFlow<List<PantryItem>>(emptyList())
-    private var nextId = 1L
+    private val items = MutableStateFlow<List<CatalogItem>>(emptyList())
+    private val txns = MutableStateFlow<List<PantryTransaction>>(emptyList())
+    private var nextItemId = 1L
+    private var nextTxnId = 1L
 
-    /** Seeds the table, assigning ids to rows that don't have one. */
-    fun seed(vararg rows: PantryItem) {
-        items.value = rows
-            .map { if (it.id == 0L) it.copy(id = nextId++) else it }
-            .sortedBy { it.name }
+    private val catalogOrder = compareBy<CatalogItem>({ it.sortOrder }, { it.id })
+    private val txnOrder = compareBy<PantryTransaction>({ it.date }, { it.id })
+
+    /** Seeds catalog rows, assigning ids to rows that don't have one; returns them as stored. */
+    fun seedItems(vararg rows: CatalogItem): List<CatalogItem> {
+        val assigned = rows.map { if (it.id == 0L) it.copy(id = nextItemId++) else it }
+        items.update { (it + assigned).sortedWith(catalogOrder) }
+        return assigned
     }
 
-    /** Current table contents, for assertions. */
-    fun snapshot(): List<PantryItem> = items.value
+    /** Seeds ledger rows, assigning ids to rows that don't have one; returns them as stored. */
+    fun seedTransactions(vararg rows: PantryTransaction): List<PantryTransaction> {
+        val assigned = rows.map { if (it.id == 0L) it.copy(id = nextTxnId++) else it }
+        txns.update { (it + assigned).sortedWith(txnOrder) }
+        return assigned
+    }
 
-    override fun observeAll(): Flow<List<PantryItem>> = items
+    /** Current catalog contents, for assertions. */
+    fun itemsSnapshot(): List<CatalogItem> = items.value
 
-    override suspend fun getAll(): List<PantryItem> = items.value
+    /** Current ledger contents, for assertions. */
+    fun transactionsSnapshot(): List<PantryTransaction> = txns.value
 
-    override suspend fun findBySpoonacularId(spoonacularId: Int): PantryItem? =
+    // ---- catalog ----------------------------------------------------------
+
+    override fun observeCatalog(): Flow<List<CatalogItem>> = items
+
+    override suspend fun getCatalog(): List<CatalogItem> = items.value
+
+    override suspend fun findBySpoonacularId(spoonacularId: Int): CatalogItem? =
         items.value.firstOrNull { it.spoonacularId == spoonacularId }
 
-    override suspend fun upsert(item: PantryItem) {
-        val row = if (item.id == 0L) item.copy(id = nextId++) else item
-        items.update { list ->
-            (list.filterNot { it.id == row.id || it.spoonacularId == row.spoonacularId } + row)
-                .sortedBy { it.name }
-        }
+    override suspend fun nextSortOrder(): Int =
+        (items.value.maxOfOrNull { it.sortOrder } ?: -1) + 1
+
+    override suspend fun insertItem(item: CatalogItem): Long {
+        val row = if (item.id == 0L) item.copy(id = nextItemId++) else item
+        items.update { (it + row).sortedWith(catalogOrder) }
+        return row.id
     }
 
-    override suspend fun update(item: PantryItem) =
-        items.update { list -> list.map { if (it.id == item.id) item else it }.sortedBy { it.name } }
+    override suspend fun updateItem(item: CatalogItem) = updateItems(listOf(item))
 
-    override suspend fun delete(item: PantryItem) =
+    override suspend fun updateItems(items: List<CatalogItem>) {
+        val byId = items.associateBy { it.id }
+        this.items.update { list -> list.map { byId[it.id] ?: it }.sortedWith(catalogOrder) }
+    }
+
+    override suspend fun deleteItem(item: CatalogItem) {
         items.update { list -> list.filterNot { it.id == item.id } }
+        txns.update { list -> list.filterNot { it.catalogItemId == item.id } }   // FK cascade
+    }
+
+    // ---- transaction ledger -----------------------------------------------
+
+    override fun observeTransactions(): Flow<List<PantryTransaction>> = txns
+
+    override suspend fun getTransactions(): List<PantryTransaction> = txns.value
+
+    override suspend fun transactionsFor(itemId: Long): List<PantryTransaction> =
+        txns.value.filter { it.catalogItemId == itemId }
+
+    override suspend fun insertTransaction(txn: PantryTransaction): Long {
+        val row = if (txn.id == 0L) txn.copy(id = nextTxnId++) else txn
+        txns.update { (it + row).sortedWith(txnOrder) }
+        return row.id
+    }
+
+    override suspend fun updateTransaction(txn: PantryTransaction) =
+        txns.update { list -> list.map { if (it.id == txn.id) txn else it }.sortedWith(txnOrder) }
+
+    override suspend fun deleteTransaction(txn: PantryTransaction) =
+        txns.update { list -> list.filterNot { it.id == txn.id } }
+
+    override suspend fun clearTransactions(itemId: Long) =
+        txns.update { list -> list.filterNot { it.catalogItemId == itemId } }
 }

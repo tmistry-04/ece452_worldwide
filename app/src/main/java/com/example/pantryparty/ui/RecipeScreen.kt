@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pantryparty.data.PantryDao
-import com.example.pantryparty.data.PantryItem
+import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.recipe.ConsumeLine
 import com.example.pantryparty.recipe.RecipeMatch
@@ -148,7 +148,7 @@ private fun FlowRowModes(mode: RecipeMode, onFromPantry: () -> Unit, onPick: () 
 }
 
 @Composable
-private fun FromPantryControls(pantry: List<PantryItem>, onRefresh: () -> Unit) {
+private fun FromPantryControls(pantry: List<StockItem>, onRefresh: () -> Unit) {
     if (pantry.isEmpty()) {
         Text("Your pantry is empty — add ingredients first.")
         return
@@ -164,7 +164,7 @@ private fun FromPantryControls(pantry: List<PantryItem>, onRefresh: () -> Unit) 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PickIngredientsControls(
-    pantry: List<PantryItem>,
+    pantry: List<StockItem>,
     selectedIds: Set<Long>,
     onToggle: (Long) -> Unit,
     onSearch: () -> Unit

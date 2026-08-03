@@ -5,10 +5,16 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-// v6: dropped the never-used PantryItem.expiryDate column.
+// v7: pantry overhaul — the single pantry_items table is replaced by a catalog
+// of desired items (catalog_items) plus a purchase/usage ledger
+// (pantry_transactions) that stock is derived from.
 // Destructive migration is configured below, so the bump just resets local data —
 // no hand-written migration needed.
-@Database(entities = [PantryItem::class], version = 6, exportSchema = false)
+@Database(
+    entities = [CatalogItem::class, PantryTransaction::class],
+    version = 7,
+    exportSchema = false
+)
 abstract class PantryDatabase : RoomDatabase() {
     abstract fun pantryDao(): PantryDao
 
