@@ -1,6 +1,7 @@
 package com.example.pantryparty.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -35,9 +36,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -418,9 +422,20 @@ fun ItemEditorDialog(
     val adding = state.editing == null
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (adding) "Add item" else "Edit item") },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                if (adding) "Add ingredient" else "Edit item",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 if (state.searching) {
                     EditorSearchStep(state, onQueryChange, onSelectSuggestion)
                 } else {
@@ -462,15 +477,33 @@ private fun EditorSearchStep(
     OutlinedTextField(
         value = state.query,
         onValueChange = onQueryChange,
-        label = { Text("Search ingredients… e.g. apple") },
+        placeholder = { Text("Search ingredients… e.g. apple") },
         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
         singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = MaterialTheme.colorScheme.secondary,
+            focusedLeadingIconColor = MaterialTheme.colorScheme.secondary,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+        ),
         modifier = Modifier.fillMaxWidth()
     )
     if (state.loading) {
         Spacer(Modifier.height(8.dp))
         CircularProgressIndicator(modifier = Modifier.size(24.dp))
     }
+    if (state.suggestions.isNotEmpty()) {
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "FROM THE FOOD DATABASE",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+
     state.suggestions.forEach { suggestion ->
         IngredientSuggestionRow(suggestion, onClick = { onSelectSuggestion(suggestion) })
     }
@@ -485,30 +518,39 @@ internal fun IngredientSuggestionRow(
     suggestion: IngredientAutocomplete,
     onClick: () -> Unit
 ) {
-    Row(
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(bottom = 8.dp)
     ) {
-        NetworkImage(
-            url = ingredientImageUrl(suggestion.image),
-            contentDescription = suggestion.name,
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(8.dp))
-        )
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(titleCase(suggestion.name))
-            suggestion.aisle?.let {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            NetworkImage(
+                url = ingredientImageUrl(suggestion.image),
+                contentDescription = suggestion.name,
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
                 Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    titleCase(suggestion.name),
+                    style = MaterialTheme.typography.titleSmall
                 )
+                suggestion.aisle?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
