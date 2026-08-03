@@ -27,7 +27,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -38,7 +37,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -478,21 +476,13 @@ private fun ConsumeLineRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        DialogStepper(Icons.Filled.Remove, "Use less ${line.item.name}", enabled = amount > 0, onClick = onDecrement)
+        StepperButton(Icons.Filled.Remove, "Use less ${line.item.name}", enabled = amount > 0, onClick = onDecrement)
         Text(
             amount.toString(),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(horizontal = 10.dp)
         )
-        DialogStepper(Icons.Filled.Add, "Use more ${line.item.name}", enabled = amount < line.item.quantity, onClick = onIncrement)
-    }
-}
-
-/** Small +/- button used by the "I made this" deduction steppers. */
-@Composable
-private fun DialogStepper(icon: ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(32.dp)) {
-        Icon(icon, contentDescription = description, modifier = Modifier.size(20.dp))
+        StepperButton(Icons.Filled.Add, "Use more ${line.item.name}", enabled = amount < line.item.quantity, onClick = onIncrement)
     }
 }
 

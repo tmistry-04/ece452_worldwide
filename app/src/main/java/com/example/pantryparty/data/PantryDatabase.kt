@@ -5,10 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-// v5: added a unique index on PantryItem.spoonacularId (one row per ingredient).
+// v6: dropped the never-used PantryItem.expiryDate column.
 // Destructive migration is configured below, so the bump just resets local data —
 // no hand-written migration needed.
-@Database(entities = [PantryItem::class], version = 5, exportSchema = false)
+@Database(entities = [PantryItem::class], version = 6, exportSchema = false)
 abstract class PantryDatabase : RoomDatabase() {
     abstract fun pantryDao(): PantryDao
 

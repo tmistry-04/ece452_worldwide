@@ -1,66 +1,19 @@
 package com.example.pantryparty.network
 
-import com.google.gson.annotations.SerializedName
+import kotlinx.serialization.Serializable
+
+// All optional fields carry defaults so a missing key in the API response falls
+// back safely instead of failing to parse (SpoonacularJson also ignores unknown
+// keys, so new response fields can't break us either).
 
 /** One suggestion from the autocomplete endpoint (metaInformation=true). */
+@Serializable
 data class IngredientAutocomplete(
     val id: Int,
     val name: String,
-    val image: String?,
-    val aisle: String?,
+    val image: String? = null,
+    val aisle: String? = null,
     val possibleUnits: List<String> = emptyList()
-)
-
-data class IngredientSearchResponse(
-    val results: List<IngredientSearchResult>,
-    val offset: Int,
-    val number: Int,
-    val totalResults: Int
-)
-
-data class IngredientSearchResult(
-    val id: Int,
-    val name: String,
-    val image: String?
-)
-
-data class IngredientInfo(
-    val id: Int,
-    val name: String,
-    val image: String?,
-    val aisle: String?,
-    @SerializedName("categoryPath") val categoryPath: List<String>?,
-    val nutrition: NutritionInfo?,
-    val estimatedCost: EstimatedCost?
-)
-
-data class NutritionInfo(
-    val nutrients: List<Nutrient>?,
-    val caloricBreakdown: CaloricBreakdown?,
-    val weightPerServing: WeightPerServing?
-)
-
-data class Nutrient(
-    val name: String,
-    val amount: Double,
-    val unit: String,
-    @SerializedName("percentOfDailyNeeds") val percentOfDailyNeeds: Double?
-)
-
-data class CaloricBreakdown(
-    val percentProtein: Double,
-    val percentFat: Double,
-    val percentCarbs: Double
-)
-
-data class WeightPerServing(
-    val amount: Double,
-    val unit: String
-)
-
-data class EstimatedCost(
-    val value: Double,
-    val unit: String
 )
 
 // ---------------------------------------------------------------------------
@@ -68,53 +21,59 @@ data class EstimatedCost(
 // ---------------------------------------------------------------------------
 
 /** One recipe from findByIngredients — counts are presence-based (no amounts). */
+@Serializable
 data class RecipeByIngredient(
     val id: Int,
     val title: String,
-    val image: String?,
-    val usedIngredientCount: Int,
-    val missedIngredientCount: Int,
+    val image: String? = null,
+    val usedIngredientCount: Int = 0,
+    val missedIngredientCount: Int = 0,
     val usedIngredients: List<RecipeIngredientBrief> = emptyList(),
     val missedIngredients: List<RecipeIngredientBrief> = emptyList()
 )
 
 /** Lightweight ingredient shape used inside findByIngredients results. */
+@Serializable
 data class RecipeIngredientBrief(
     val id: Int,
     val name: String,
-    val amount: Double,
-    val unit: String,
-    val original: String?,
-    val image: String?
+    val amount: Double = 0.0,
+    val unit: String = "",
+    val original: String? = null,
+    val image: String? = null
 )
 
 /** Full recipe details from informationBulk — carries required amounts. */
+@Serializable
 data class RecipeInformation(
     val id: Int,
     val title: String,
-    val image: String?,
-    val readyInMinutes: Int?,
-    val servings: Int?,
+    val image: String? = null,
+    val readyInMinutes: Int? = null,
+    val servings: Int? = null,
     val extendedIngredients: List<ExtendedIngredient> = emptyList()
 )
 
 /** A required ingredient with its amount/unit; `id` matches PantryItem.spoonacularId. */
+@Serializable
 data class ExtendedIngredient(
     val id: Int,
     val name: String,
-    val amount: Double,
-    val unit: String,
-    val original: String?,
-    val measures: Measures?
+    val amount: Double = 0.0,
+    val unit: String = "",
+    val original: String? = null,
+    val measures: Measures? = null
 )
 
+@Serializable
 data class Measures(
-    val metric: Measure?,
-    val us: Measure?
+    val metric: Measure? = null,
+    val us: Measure? = null
 )
 
+@Serializable
 data class Measure(
     val amount: Double,
-    val unitShort: String,
-    val unitLong: String
+    val unitShort: String = "",
+    val unitLong: String = ""
 )

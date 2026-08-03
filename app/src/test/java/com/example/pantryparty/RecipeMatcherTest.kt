@@ -108,27 +108,6 @@ class RecipeMatcherTest {
     }
 
     @Test
-    fun bucketAndSort_dropsOverThreeMissing_andSortsAscending() {
-        // Recipe A: 2 missing, Recipe B: 0 missing, Recipe C: 4 missing (dropped).
-        val empty = emptyList<PantryItem>()
-        val a = RecipeMatcher.match(empty, recipe(ing(1, 1.0, "g"), ing(2, 1.0, "g")))
-        val b = RecipeMatcher.match(
-            listOf(pantry(3, 1, "g")),
-            recipe(ing(3, 1.0, "g"))
-        )
-        val c = RecipeMatcher.match(
-            empty,
-            recipe(ing(1, 1.0, "g"), ing(2, 1.0, "g"), ing(3, 1.0, "g"), ing(4, 1.0, "g"))
-        )
-
-        val sorted = RecipeMatcher.bucketAndSort(listOf(a, b, c))
-
-        assertEquals(2, sorted.size)               // C dropped (4 > MAX_MISSING)
-        assertEquals(0, sorted[0].missingCount)    // B first
-        assertEquals(2, sorted[1].missingCount)    // A second
-    }
-
-    @Test
     fun bucketByMissed_dropsOverThree_andSortsReadyFirst() {
         val input = listOf(
             byIngredient(id = 1, missed = 2),

@@ -10,10 +10,13 @@ import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.SpoonacularRepository
+import com.example.pantryparty.network.SpoonacularRepositoryImpl
+import com.example.pantryparty.network.friendlyApiError
 import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,7 +24,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import retrofit2.HttpException
 
 /** Which recipe-finding mode the screen is showing. */
 enum class RecipeMode { FROM_PANTRY, PICK_INGREDIENTS }
@@ -60,7 +62,10 @@ data class ConsumeDraft(
  * (1 point), which already returns the have/missing split with staples ignored;
  * the per-recipe amount/consume checks fetch full details on demand.
  */
-class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
+class RecipeViewModel(
+    private val dao: PantryDao,
+    private val repository: SpoonacularRepository
+) : ViewModel() {
 
     /** Pantry snapshot driving the mode controls; kept hot while subscribed. */
     val pantry: StateFlow<List<PantryItem>> =
@@ -84,26 +89,30 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
     // Guards Mode A so it auto-runs only once per entry, not on every pantry edit.
     private var pantryLoaded = false
 
+    // The active search (and its follow-up staples fetch); cancelled whenever a
+    // new search starts or the mode changes, so stale responses can't land.
+    private var searchJob: Job? = null
+
     fun showFromPantry() {
         // Drop any picked-ingredient results and let Mode A re-run fresh.
-        _uiState.update {
-            it.copy(
-                mode = RecipeMode.FROM_PANTRY,
-                recipes = emptyList(),
-                hasSearched = false,
-                error = null
-            )
-        }
-        _cardStates.value = emptyMap()
+        switchMode(RecipeMode.FROM_PANTRY)
         pantryLoaded = false
     }
 
-    fun showPickIngredients() {
+    fun showPickIngredients() = switchMode(RecipeMode.PICK_INGREDIENTS)
+
+    private fun switchMode(mode: RecipeMode) {
+        searchJob?.cancel()
+        // selectedIds is deliberately kept, so picks survive a round-trip through
+        // the other mode. Ids of since-deleted rows are harmless: searchSelected
+        // re-filters against the live pantry.
         _uiState.update {
             it.copy(
-                mode = RecipeMode.PICK_INGREDIENTS,
+                mode = mode,
                 recipes = emptyList(),
+                staplesByRecipe = emptyMap(),
                 hasSearched = false,
+                loading = false,
                 error = null
             )
         }
@@ -135,45 +144,50 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
     // details fetch fills in each card's staples list (and primes the cache).
     private fun findRecipes(names: List<String>) {
         if (names.isEmpty()) return
-        viewModelScope.launch {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             _uiState.update { it.copy(loading = true, error = null, hasSearched = true, staplesByRecipe = emptyMap()) }
             _cardStates.value = emptyMap()
             detailsById = emptyMap()
-            SpoonacularRepository.findRecipesByIngredients(names, number = RECIPE_COUNT)
+            repository.findRecipesByIngredients(names, number = RECIPE_COUNT)
                 .onSuccess { result ->
                     val recipes = RecipeMatcher.bucketByMissed(result)
                     _uiState.update { it.copy(recipes = recipes, loading = false) }
                     loadStaples(recipes)
                 }
-                .onFailure { e -> _uiState.update { it.copy(error = friendlyError(e), loading = false) } }
+                .onFailure { e -> _uiState.update { it.copy(error = friendlyApiError(e), loading = false) } }
         }
     }
 
     /**
      * Fetches full details for the shown recipes once, caches them, and computes
-     * each recipe's staple list (ingredients the search ignored). Best-effort: if
-     * this call fails (e.g. quota), the results still show, just without staples.
+     * each recipe's staple list (ingredients the search ignored). Runs inside the
+     * search job so it is cancelled along with the search it belongs to.
+     * Best-effort: if this call fails (e.g. quota), the results still show, just
+     * without staples.
      */
-    private fun loadStaples(recipes: List<RecipeByIngredient>) {
+    private suspend fun loadStaples(recipes: List<RecipeByIngredient>) {
         if (recipes.isEmpty()) return
-        viewModelScope.launch {
-            SpoonacularRepository.getRecipeInformationBulk(recipes.map { it.id })
-                .onSuccess { infos ->
-                    detailsById = infos.associateBy { it.id }
-                    val staples = recipes.associate { r ->
-                        val info = detailsById[r.id]
-                        val nonStaple = (r.usedIngredients + r.missedIngredients).map { it.id }.toSet()
-                        r.id to (info?.let { RecipeMatcher.staplesOf(it, nonStaple).map { ing -> ing.name } } ?: emptyList())
-                    }
-                    _uiState.update { it.copy(staplesByRecipe = staples) }
+        repository.getRecipeInformationBulk(recipes.map { it.id })
+            .onSuccess { infos ->
+                detailsById = infos.associateBy { it.id }
+                val staples = recipes.associate { r ->
+                    val info = detailsById[r.id]
+                    val nonStaple = (r.usedIngredients + r.missedIngredients).map { it.id }.toSet()
+                    r.id to (info?.let { RecipeMatcher.staplesOf(it, nonStaple).map { ing -> ing.name } } ?: emptyList())
                 }
-        }
+                _uiState.update { it.copy(staplesByRecipe = staples) }
+            }
     }
 
     /** Recipe details, reusing the per-search batch fetch when it's available. */
     private suspend fun recipeDetails(recipeId: Int): Result<RecipeInformation?> =
         detailsById[recipeId]?.let { Result.success(it) }
-            ?: SpoonacularRepository.getRecipeInformationBulk(listOf(recipeId)).map { it.firstOrNull() }
+            ?: repository.getRecipeInformationBulk(listOf(recipeId)).map { infos ->
+                // Cache the one-off fetch too, so a second check on the same card
+                // (amounts, then "I made this") doesn't hit the API again.
+                infos.firstOrNull()?.also { detailsById = detailsById + (it.id to it) }
+            }
 
     // ---- Per-recipe actions (on-demand details fetch) ----
 
@@ -198,7 +212,7 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
                     val match = info?.let { RecipeMatcher.match(pantrySnapshot, it, nonStaple) }
                     updateCard(recipeId) { it.copy(amountCheck = match, checking = false) }
                 }
-                .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyError(e), checking = false) } }
+                .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyApiError(e), checking = false) } }
         }
     }
 
@@ -215,7 +229,7 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
                         ?.let { plan -> ConsumeDraft(plan, plan.lines.map { it.suggested }) }
                     updateCard(recipeId) { it.copy(consume = draft, checking = false) }
                 }
-                .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyError(e), checking = false) } }
+                .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyApiError(e), checking = false) } }
         }
     }
 
@@ -236,9 +250,15 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
             draft.plan.lines.forEachIndexed { i, line ->
                 val deduct = draft.amounts.getOrElse(i) { 0 }
                 if (deduct <= 0) return@forEachIndexed
-                val remaining = line.item.quantity - deduct
-                if (remaining <= 0) dao.delete(line.item)
-                else dao.update(line.item.copy(quantity = remaining))
+                // Re-read the row so a pantry edit made after the dialog opened
+                // (its plan holds a snapshot) can't be silently overwritten.
+                val current = dao.findBySpoonacularId(line.item.spoonacularId) ?: return@forEachIndexed
+                // If the unit changed too, the planned deduction is in the wrong
+                // unit and can't be converted — leave the row alone.
+                if (!RecipeMatcher.unitsMatch(current.unit, line.item.unit)) return@forEachIndexed
+                val remaining = current.quantity - deduct
+                if (remaining <= 0) dao.delete(current)
+                else dao.update(current.copy(quantity = remaining))
             }
         }
         updateCard(recipeId) { it.copy(consume = null) }
@@ -256,17 +276,12 @@ class RecipeViewModel(private val dao: PantryDao) : ViewModel() {
         /** How many candidate recipes to request per search (keeps API point cost ~1). */
         const val RECIPE_COUNT = 10
 
-        /** Factory that injects the [dao] (no DI framework in the project). */
-        fun factory(dao: PantryDao): ViewModelProvider.Factory = viewModelFactory {
-            initializer { RecipeViewModel(dao) }
+        /** Factory that injects the dependencies (no DI framework in the project). */
+        fun factory(
+            dao: PantryDao,
+            repository: SpoonacularRepository = SpoonacularRepositoryImpl
+        ): ViewModelProvider.Factory = viewModelFactory {
+            initializer { RecipeViewModel(dao, repository) }
         }
     }
 }
-
-/** Maps API failures to user-readable text (quota 402 gets a clear hint). */
-private fun friendlyError(t: Throwable): String =
-    if (t is HttpException && t.code() == 402) {
-        "Daily Spoonacular quota reached — try again after the daily reset or add a new API key."
-    } else {
-        "Error: ${t.message}"
-    }

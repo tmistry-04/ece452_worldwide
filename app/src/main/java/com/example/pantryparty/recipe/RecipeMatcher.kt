@@ -93,11 +93,6 @@ object RecipeMatcher {
     fun staplesOf(recipe: RecipeInformation, nonStapleIds: Set<Int>): List<ExtendedIngredient> =
         recipe.extendedIngredients.filter { it.id !in nonStapleIds }
 
-    /** Keeps recipes within [MAX_MISSING] and sorts fewest-missing first. */
-    fun bucketAndSort(matches: List<RecipeMatch>): List<RecipeMatch> =
-        matches.filter { it.missingCount <= MAX_MISSING }
-            .sortedBy { it.missingCount }
-
     /**
      * Recommender bucketing straight off findByIngredients — needs no extra API
      * calls. Counts off the `missedIngredients` list (not the `missedIngredientCount`
@@ -122,9 +117,12 @@ object RecipeMatcher {
             }
         }
 
-    /** Shared unit-equality rule, also reused by [PantryConsumer]. */
+    /**
+     * Shared unit-equality rule, also reused by [PantryConsumer]: case- and
+     * whitespace-insensitive equality. A blank unit never matches anything
+     * (there is no way to tell what it measures).
+     */
     internal fun unitsMatch(a: String?, b: String?): Boolean {
-        // Treat blank/"piece" loosely; otherwise compare normalized text.
         val na = a?.trim()?.lowercase().orEmpty()
         val nb = b?.trim()?.lowercase().orEmpty()
         return na.isNotEmpty() && na == nb

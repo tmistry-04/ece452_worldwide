@@ -17,9 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -65,6 +65,7 @@ import com.example.pantryparty.data.PantryItem
 import com.example.pantryparty.network.IngredientAutocomplete
 import com.example.pantryparty.ui.NetworkImage
 import com.example.pantryparty.ui.RecipeScreen
+import com.example.pantryparty.ui.StepperButton
 import com.example.pantryparty.ui.ingredientImageUrl
 import com.example.pantryparty.ui.theme.PantryPartyTheme
 import com.example.pantryparty.viewmodel.AddIngredientUiState
@@ -157,7 +158,7 @@ fun PantryScreen(dao: PantryDao) {
             .fillMaxSize()
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 16.dp)
+        contentPadding = PaddingValues(vertical = 16.dp)
     ) {
         // Add-ingredient flow lives at the top of the list.
         item {
@@ -289,24 +290,6 @@ private fun PantryRow(
                 )
             }
         }
-    }
-}
-
-/** Small circular tonal +/- button used by the pantry stepper. */
-@Composable
-private fun StepperButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = MaterialTheme.colorScheme.primary
-        )
     }
 }
 
