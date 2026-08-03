@@ -45,6 +45,8 @@ class FakeSpoonacularRepository : SpoonacularRepository {
     val autocompleteQueries = mutableListOf<String>()
     var lastRecipeQuery: List<String>? = null
         private set
+    var lastRecipeFilters: Map<String, String>? = null
+        private set
     var lastDetailsIds: List<Int>? = null
         private set
 
@@ -56,12 +58,14 @@ class FakeSpoonacularRepository : SpoonacularRepository {
         return autocompleteHandler?.invoke(query) ?: autocompleteResult
     }
 
-    override suspend fun findRecipesByIngredients(
+    override suspend fun searchRecipes(
         names: List<String>,
+        filters: Map<String, String>,
         number: Int
     ): Result<List<RecipeByIngredient>> {
         recipesCalls++
         lastRecipeQuery = names
+        lastRecipeFilters = filters
         if (hangRecipes) awaitCancellation()
         return recipesResult
     }

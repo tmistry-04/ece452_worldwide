@@ -8,6 +8,7 @@ import com.example.pantryparty.network.ExtendedIngredient
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.RecipeIngredientBrief
+import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.viewmodel.RecipeViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -89,15 +90,62 @@ class RecipeViewModelTest {
         )
         val vm = startViewModel()
 
-        vm.refreshFromPantry()
+        vm.search()
         advanceUntilIdle()
 
         val ui = vm.uiState.value
         assertEquals(listOf(3, 1), ui.recipes.map { it.id })  // ready first, missed=4 dropped
         assertTrue(ui.hasSearched)
+        assertTrue(ui.ingredientSearch)
         assertFalse(ui.loading)
         assertNull(ui.error)
+        // The whole pantry is the default selection, with the matching sort applied.
         assertEquals(listOf("egg"), repo.lastRecipeQuery)
+        assertEquals("min-missing-ingredients", repo.lastRecipeFilters!!["sort"])
+    }
+
+    @Test
+    fun filterOnlySearch_keepsResultsAndSkipsMissingBucketing() = runTest {
+        // Empty pantry: the search runs purely on filters. fillIngredients then
+        // reports every recipe ingredient as "missed", so nothing may be bucketed
+        // or dropped by missing count.
+        repo.recipesResult = Result.success(listOf(searchResult(1, missed = 16)))
+        val vm = startViewModel()
+
+        vm.setFilters(RecipeFilters(query = "pasta"))
+        vm.search()
+        advanceUntilIdle()
+
+        val ui = vm.uiState.value
+        assertEquals(listOf(1), ui.recipes.map { it.id })   // kept despite 16 "missed"
+        assertFalse(ui.ingredientSearch)
+        assertEquals(emptyList<String>(), repo.lastRecipeQuery)
+        assertEquals("pasta", repo.lastRecipeFilters!!["query"])
+        assertNull(repo.lastRecipeFilters!!["sort"])         // no ingredient sort forced
+    }
+
+    @Test
+    fun search_withNoIngredientsAndNoFilters_doesNothing() = runTest {
+        val vm = startViewModel()   // empty pantry, default filters
+
+        vm.search()
+        advanceUntilIdle()
+
+        assertEquals(0, repo.recipesCalls)
+        assertFalse(vm.uiState.value.hasSearched)
+    }
+
+    @Test
+    fun toggleSelected_narrowsTheSearchToThePickedItems() = runTest {
+        val egg = seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
+        seedStock("milk", stock = 1, unit = "l", spoonacularId = 2)
+        val vm = startViewModel()
+
+        vm.toggleSelected(egg.id)   // deselect egg out of the implicit "whole pantry"
+        vm.search()
+        advanceUntilIdle()
+
+        assertEquals(listOf("milk"), repo.lastRecipeQuery)
     }
 
     @Test
@@ -108,7 +156,7 @@ class RecipeViewModelTest {
         )
         val vm = startViewModel()
 
-        vm.refreshFromPantry()
+        vm.search()
         advanceUntilIdle()
 
         val ui = vm.uiState.value
@@ -116,24 +164,26 @@ class RecipeViewModelTest {
         assertFalse(ui.loading)
     }
 
-    /** Regression: switching modes must cancel an in-flight search. */
+    /** Regression: a new search must cancel the in-flight one so stale responses can't land. */
     @Test
-    fun switchingMode_cancelsAnInFlightSearch() = runTest {
+    fun aNewSearch_cancelsTheInFlightOne() = runTest {
         seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
         repo.hangRecipes = true
         val vm = startViewModel()
 
-        vm.refreshFromPantry()
+        vm.search()
         assertTrue(vm.uiState.value.loading)   // request is in flight (hanging)
 
-        vm.showPickIngredients()
+        repo.hangRecipes = false
+        repo.recipesResult = Result.success(listOf(searchResult(1, missed = 0)))
+        vm.search()
         advanceUntilIdle()
 
         val ui = vm.uiState.value
-        assertFalse(ui.loading)                // no stuck spinner
-        assertFalse(ui.hasSearched)
-        assertTrue(ui.recipes.isEmpty())
-        assertNull(ui.error)                   // cancellation is not an error
+        assertEquals(listOf(1), ui.recipes.map { it.id })   // second search's answer
+        assertFalse(ui.loading)                             // no stuck spinner
+        assertNull(ui.error)                                // cancellation is not an error
+        assertEquals(2, repo.recipesCalls)
     }
 
     /** Regression: a one-off details fetch is cached for the next check on the same card. */

@@ -15,6 +15,7 @@ import com.example.pantryparty.pantry.PantryMath
 import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.PantryConsumer
+import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
 import com.example.pantryparty.recipe.StapleSet
@@ -28,15 +29,24 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** Which recipe-finding mode the screen is showing. */
-enum class RecipeMode { FROM_PANTRY, PICK_INGREDIENTS }
-
-/** Screen-level state for the recipe finder (mode toggle + search results). */
+/**
+ * Screen-level state for the recipe finder (filter panel + search results).
+ *
+ * [selectedIds] is the pantry-ingredient selection feeding `includeIngredients`:
+ * null means "the whole pantry" (the default, resolved against the live pantry at
+ * search time), an explicit set means the user has customized it.
+ *
+ * [ingredientSearch] records whether the *last* search included any ingredients.
+ * Without ingredients, fillIngredients marks every recipe ingredient as "missed"
+ * (verified against the live API), so those results must skip the missing-count
+ * bucketing and the have/need pills.
+ */
 data class RecipeUiState(
-    val mode: RecipeMode = RecipeMode.FROM_PANTRY,
-    val selectedIds: Set<Long> = emptySet(),
+    val selectedIds: Set<Long>? = null,
+    val filters: RecipeFilters = RecipeFilters(),
     val recipes: List<RecipeByIngredient> = emptyList(),
     val staplesByRecipe: Map<Int, List<String>> = emptyMap(),   // recipe id -> staple names
+    val ingredientSearch: Boolean = true,
     val loading: Boolean = false,
     val error: String? = null,
     val hasSearched: Boolean = false,
@@ -61,9 +71,10 @@ data class ConsumeDraft(
 )
 
 /**
- * Owns the Recipes tab. Both modes use a single cheap findByIngredients call
- * (1 point), which already returns the have/missing split with staples ignored;
- * the per-recipe amount/consume checks fetch full details on demand.
+ * Owns the Recipes tab. Every search is a single complexSearch call — the user's
+ * filters plus the selected pantry ingredients — whose fillIngredients response
+ * already carries the have/missing split with staples ignored; the per-recipe
+ * amount/consume checks fetch full details on demand.
  */
 class RecipeViewModel(
     private val dao: PantryDao,
@@ -106,77 +117,75 @@ class RecipeViewModel(
     // reused by the amount/consume checks to avoid re-fetching. Main-thread only.
     private var detailsById: Map<Int, RecipeInformation> = emptyMap()
 
-    // Guards Mode A so it auto-runs only once per entry, not on every pantry edit.
-    private var pantryLoaded = false
-
     // The active search (and its follow-up staples fetch); cancelled whenever a
-    // new search starts or the mode changes, so stale responses can't land.
+    // new search starts, so stale responses can't land.
     private var searchJob: Job? = null
 
-    fun showFromPantry() {
-        // Drop any picked-ingredient results and let Mode A re-run fresh.
-        switchMode(RecipeMode.FROM_PANTRY)
-        pantryLoaded = false
+    // ---- Filter panel state ----
+
+    fun setFilters(filters: RecipeFilters) = _uiState.update { it.copy(filters = filters) }
+
+    fun resetFilters() = _uiState.update { it.copy(filters = RecipeFilters()) }
+
+    fun toggleSelected(id: Long) = _uiState.update { ui ->
+        // A tap on any chip materializes the implicit "whole pantry" default
+        // into an explicit selection first.
+        val current = ui.selectedIds ?: pantry.value.mapTo(mutableSetOf()) { it.id }
+        val next = if (id in current) current - id else current + id
+        ui.copy(selectedIds = next)
     }
 
-    fun showPickIngredients() = switchMode(RecipeMode.PICK_INGREDIENTS)
+    /** Back to the default: search with whatever the pantry holds at search time. */
+    fun selectAllIngredients() = _uiState.update { it.copy(selectedIds = null) }
 
-    private fun switchMode(mode: RecipeMode) {
-        searchJob?.cancel()
-        // selectedIds is deliberately kept, so picks survive a round-trip through
-        // the other mode. Ids of since-deleted rows are harmless: searchSelected
-        // re-filters against the live pantry.
-        _uiState.update {
-            it.copy(
-                mode = mode,
-                recipes = emptyList(),
-                staplesByRecipe = emptyMap(),
-                hasSearched = false,
-                loading = false,
-                error = null
-            )
+    fun clearSelectedIngredients() = _uiState.update { it.copy(selectedIds = emptySet()) }
+
+    // ---- Searching ----
+
+    /** The first search auto-runs once the pantry has anything in it. */
+    fun autoSearchIfNeeded() {
+        if (!_uiState.value.hasSearched && pantry.value.isNotEmpty()) search()
+    }
+
+    /**
+     * Runs one complexSearch from the current selection + filters. Ingredient
+     * searches keep the "fewest missing first" ordering unless the user picked a
+     * sort themselves; the follow-up bulk details fetch fills in each card's
+     * staples list (and primes the details cache).
+     */
+    fun search() {
+        val names = selectedIngredientNames()
+        val filters = _uiState.value.filters
+        // Nothing to search on: no ingredients and no criteria set.
+        if (names.isEmpty() && filters.activeFilterCount == 0) return
+        val params = filters.toQueryMap().toMutableMap()
+        if (names.isNotEmpty() && !params.containsKey("sort")) {
+            params["sort"] = "min-missing-ingredients"
         }
-        _cardStates.value = emptyMap()
-    }
-
-    fun toggleSelected(id: Long) = _uiState.update {
-        val next = if (id in it.selectedIds) it.selectedIds - id else it.selectedIds + id
-        it.copy(selectedIds = next)
-    }
-
-    /** Mode A auto-runs once when the screen opens (or re-enters) with a non-empty pantry. */
-    fun autoLoadFromPantryIfNeeded() {
-        val names = pantry.value.map { it.name }
-        if (_uiState.value.mode == RecipeMode.FROM_PANTRY && names.isNotEmpty() && !pantryLoaded) {
-            pantryLoaded = true
-            findRecipes(names)
-        }
-    }
-
-    fun refreshFromPantry() = findRecipes(pantry.value.map { it.name })
-
-    fun searchSelected() {
-        val names = pantry.value.filter { it.id in _uiState.value.selectedIds }.map { it.name }
-        findRecipes(names)
-    }
-
-    // findByIngredients returns have/missing already bucketed; a follow-up bulk
-    // details fetch fills in each card's staples list (and primes the cache).
-    private fun findRecipes(names: List<String>) {
-        if (names.isEmpty()) return
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             _uiState.update { it.copy(loading = true, error = null, hasSearched = true, staplesByRecipe = emptyMap()) }
             _cardStates.value = emptyMap()
             detailsById = emptyMap()
-            repository.findRecipesByIngredients(names, number = RECIPE_COUNT)
+            repository.searchRecipes(names, params, RECIPE_COUNT)
                 .onSuccess { result ->
-                    val recipes = RecipeMatcher.bucketByMissed(result)
-                    _uiState.update { it.copy(recipes = recipes, loading = false) }
+                    // Only ingredient-aware results are bucketed/filtered by missing
+                    // count — see RecipeUiState.ingredientSearch.
+                    val recipes = if (names.isNotEmpty()) RecipeMatcher.bucketByMissed(result) else result
+                    _uiState.update {
+                        it.copy(recipes = recipes, ingredientSearch = names.isNotEmpty(), loading = false)
+                    }
                     loadStaples(recipes)
                 }
                 .onFailure { e -> _uiState.update { it.copy(error = friendlyApiError(e), loading = false) } }
         }
+    }
+
+    /** The ingredient names the next search will pass as includeIngredients. */
+    private fun selectedIngredientNames(): List<String> {
+        val stock = pantry.value
+        val selected = _uiState.value.selectedIds ?: return stock.map { it.name }
+        return stock.filter { it.id in selected }.map { it.name }
     }
 
     /**
@@ -305,7 +314,7 @@ class RecipeViewModel(
     }
 
     companion object {
-        /** How many candidate recipes to request per search (keeps API point cost ~1). */
+        /** How many candidate recipes to request per search. */
         const val RECIPE_COUNT = 10
 
         /** Factory that injects the dependencies (no DI framework in the project). */

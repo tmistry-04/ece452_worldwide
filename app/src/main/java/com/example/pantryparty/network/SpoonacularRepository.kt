@@ -17,7 +17,7 @@ import java.io.IOException
  */
 interface SpoonacularRepository {
     suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>>
-    suspend fun findRecipesByIngredients(names: List<String>, number: Int): Result<List<RecipeByIngredient>>
+    suspend fun searchRecipes(names: List<String>, filters: Map<String, String>, number: Int): Result<List<RecipeByIngredient>>
     suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>>
 }
 
@@ -56,16 +56,18 @@ object SpoonacularRepositoryImpl : SpoonacularRepository {
         runCatchingApi { api.autocompleteIngredients(query = query, apiKey = apiKey) }
 
     // Joins ingredient names into the comma-separated form the endpoint expects.
-    override suspend fun findRecipesByIngredients(
+    override suspend fun searchRecipes(
         names: List<String>,
+        filters: Map<String, String>,
         number: Int
     ): Result<List<RecipeByIngredient>> =
         runCatchingApi {
-            api.findRecipesByIngredients(
-                ingredients = names.joinToString(","),
+            api.searchRecipes(
+                filters = filters,
+                includeIngredients = names.takeIf { it.isNotEmpty() }?.joinToString(","),
                 number = number,
                 apiKey = apiKey
-            )
+            ).results
         }
 
     override suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>> =

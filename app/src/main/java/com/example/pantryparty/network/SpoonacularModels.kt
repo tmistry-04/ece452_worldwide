@@ -20,7 +20,18 @@ data class IngredientAutocomplete(
 // Recipe endpoints
 // ---------------------------------------------------------------------------
 
-/** One recipe from findByIngredients — counts are presence-based (no amounts). */
+/**
+ * Envelope for complexSearch. With `fillIngredients=true` each result carries the
+ * same used/missed ingredient split findByIngredients returned, so the results
+ * reuse [RecipeByIngredient] (verified against the live API).
+ */
+@Serializable
+data class ComplexSearchResponse(
+    val results: List<RecipeByIngredient> = emptyList(),
+    val totalResults: Int = 0
+)
+
+/** One recipe from a search — counts are presence-based (no amounts). */
 @Serializable
 data class RecipeByIngredient(
     val id: Int,

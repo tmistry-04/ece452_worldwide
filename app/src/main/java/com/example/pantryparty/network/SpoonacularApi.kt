@@ -2,6 +2,7 @@ package com.example.pantryparty.network
 
 import retrofit2.http.GET
 import retrofit2.http.Query
+import retrofit2.http.QueryMap
 
 interface SpoonacularApi {
 
@@ -13,15 +14,18 @@ interface SpoonacularApi {
         @Query("apiKey") apiKey: String
     ): List<IngredientAutocomplete>
 
-    // Recipes the user can (almost) make from a set of ingredient names.
-    @GET("recipes/findByIngredients")
-    suspend fun findRecipesByIngredients(
-        @Query("ingredients") ingredients: String,   // comma-separated names
+    // Filtered recipe search. `filters` carries the user's criteria as query
+    // params (see RecipeFilters.toQueryMap); with fillIngredients=true each
+    // result reports its used/missed split against includeIngredients.
+    @GET("recipes/complexSearch")
+    suspend fun searchRecipes(
+        @QueryMap filters: Map<String, String>,
+        @Query("includeIngredients") includeIngredients: String?,  // comma-separated; null = no ingredient matching
+        @Query("fillIngredients") fillIngredients: Boolean = true,
+        @Query("ignorePantry") ignorePantry: Boolean = true,       // staples are RecipeMatcher's job
         @Query("number") number: Int = 20,
-        @Query("ranking") ranking: Int = 2,          // 2 = minimize missing ingredients
-        @Query("ignorePantry") ignorePantry: Boolean = true,
         @Query("apiKey") apiKey: String
-    ): List<RecipeByIngredient>
+    ): ComplexSearchResponse
 
     // Full details (with required amounts) for several recipes at once.
     @GET("recipes/informationBulk")

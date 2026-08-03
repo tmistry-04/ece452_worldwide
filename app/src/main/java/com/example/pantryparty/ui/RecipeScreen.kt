@@ -25,7 +25,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -42,21 +41,19 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.pantryparty.data.PantryDao
-import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.recipe.ConsumeLine
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
 import com.example.pantryparty.viewmodel.ConsumeDraft
 import com.example.pantryparty.viewmodel.RecipeCardState
-import com.example.pantryparty.viewmodel.RecipeMode
 import com.example.pantryparty.viewmodel.RecipeViewModel
 
 /**
  * Feature 2 — recipe finding. State and the Spoonacular calls live in
- * [RecipeViewModel]; this screen observes its state and forwards events.
- *  - FROM_PANTRY:      uses every pantry item.
- *  - PICK_INGREDIENTS: uses only the items the user selects.
+ * [RecipeViewModel]; this screen observes its state and forwards events. One
+ * search path: complexSearch fed by the filter panel (pantry-ingredient
+ * selection + every other API option).
  */
 @Composable
 fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
@@ -65,9 +62,9 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val cardStates by viewModel.cardStates.collectAsStateWithLifecycle()
 
-    // Mode A auto-runs once when first opened (or re-entered) with a non-empty pantry.
-    LaunchedEffect(ui.mode, pantry.isNotEmpty()) {
-        viewModel.autoLoadFromPantryIfNeeded()
+    // The first search auto-runs once the pantry has anything in it.
+    LaunchedEffect(pantry.isNotEmpty()) {
+        viewModel.autoSearchIfNeeded()
     }
 
     // Owns its own vertical scroll (MainScaffold no longer provides one).
@@ -84,26 +81,19 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(12.dp))
 
-        // Mode toggle
-        FlowRowModes(
-            mode = ui.mode,
-            onFromPantry = viewModel::showFromPantry,
-            onPick = viewModel::showPickIngredients
+        RecipeFilterPanel(
+            pantry = pantry,
+            selectedIds = ui.selectedIds ?: pantry.mapTo(mutableSetOf()) { it.id },
+            filters = ui.filters,
+            searchEnabled = (ui.selectedIds?.isNotEmpty() ?: pantry.isNotEmpty()) ||
+                ui.filters.activeFilterCount > 0,
+            onToggleIngredient = viewModel::toggleSelected,
+            onSelectAllIngredients = viewModel::selectAllIngredients,
+            onClearIngredients = viewModel::clearSelectedIngredients,
+            onFiltersChange = viewModel::setFilters,
+            onSearch = viewModel::search,
+            onReset = viewModel::resetFilters
         )
-        Spacer(Modifier.height(12.dp))
-
-        when (ui.mode) {
-            RecipeMode.FROM_PANTRY -> FromPantryControls(
-                pantry = pantry,
-                onRefresh = viewModel::refreshFromPantry
-            )
-            RecipeMode.PICK_INGREDIENTS -> PickIngredientsControls(
-                pantry = pantry,
-                selectedIds = ui.selectedIds,
-                onToggle = viewModel::toggleSelected,
-                onSearch = viewModel::searchSelected
-            )
-        }
 
         Spacer(Modifier.height(12.dp))
 
@@ -120,6 +110,7 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
                 recipes = ui.recipes,
                 staplesByRecipe = ui.staplesByRecipe,
                 cardStates = cardStates,
+                ingredientSearch = ui.ingredientSearch,
                 onCheckAmounts = viewModel::checkAmounts,
                 onPrepareConsume = viewModel::prepareConsume,
                 onAdjustConsume = viewModel::adjustConsume,
@@ -130,71 +121,12 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun FlowRowModes(mode: RecipeMode, onFromPantry: () -> Unit, onPick: () -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilterChip(
-            selected = mode == RecipeMode.FROM_PANTRY,
-            onClick = onFromPantry,
-            label = { Text("From my pantry") }
-        )
-        FilterChip(
-            selected = mode == RecipeMode.PICK_INGREDIENTS,
-            onClick = onPick,
-            label = { Text("Pick ingredients") }
-        )
-    }
-}
-
-@Composable
-private fun FromPantryControls(pantry: List<StockItem>, onRefresh: () -> Unit) {
-    if (pantry.isEmpty()) {
-        Text("Your pantry is empty — add ingredients first.")
-        return
-    }
-    Text(
-        "Showing recipes you can make with your ${pantry.size} pantry item(s).",
-        style = MaterialTheme.typography.bodyMedium
-    )
-    Spacer(Modifier.height(8.dp))
-    Button(onClick = onRefresh) { Text("Refresh") }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun PickIngredientsControls(
-    pantry: List<StockItem>,
-    selectedIds: Set<Long>,
-    onToggle: (Long) -> Unit,
-    onSearch: () -> Unit
-) {
-    if (pantry.isEmpty()) {
-        Text("Your pantry is empty — add ingredients first.")
-        return
-    }
-    Text("Pick the ingredients to cook with:", style = MaterialTheme.typography.bodyMedium)
-    Spacer(Modifier.height(8.dp))
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        pantry.forEach { item ->
-            FilterChip(
-                selected = item.id in selectedIds,
-                onClick = { onToggle(item.id) },
-                label = { Text(item.name) }
-            )
-        }
-    }
-    Spacer(Modifier.height(12.dp))
-    Button(onClick = onSearch, enabled = selectedIds.isNotEmpty()) {
-        Text("Find recipes")
-    }
-}
-
 @Composable
 private fun RecipeResults(
     recipes: List<RecipeByIngredient>,
     staplesByRecipe: Map<Int, List<String>>,
     cardStates: Map<Int, RecipeCardState>,
+    ingredientSearch: Boolean,
     onCheckAmounts: (Int) -> Unit,
     onPrepareConsume: (Int) -> Unit,
     onAdjustConsume: (recipeId: Int, lineIndex: Int, delta: Int) -> Unit,
@@ -215,10 +147,41 @@ private fun RecipeResults(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "No recipes within ${RecipeMatcher.MAX_MISSING} missing ingredients.",
+                if (ingredientSearch)
+                    "No recipes within ${RecipeMatcher.MAX_MISSING} missing ingredients."
+                else
+                    "No recipes matched your filters.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        return
+    }
+
+    @Composable
+    fun card(recipe: RecipeByIngredient) = RecipeCard(
+        recipe = recipe,
+        staples = staplesByRecipe[recipe.id].orEmpty(),
+        cardState = cardStates[recipe.id] ?: RecipeCardState(),
+        showIngredientMatch = ingredientSearch,
+        onCheckAmounts = { onCheckAmounts(recipe.id) },
+        onPrepareConsume = { onPrepareConsume(recipe.id) },
+        onAdjustConsume = { lineIndex, delta -> onAdjustConsume(recipe.id, lineIndex, delta) },
+        onConfirmConsume = { onConfirmConsume(recipe.id) },
+        onDismissConsume = { onDismissConsume(recipe.id) }
+    )
+
+    // Filter-only search: no ingredient context, so no have/missing framing at all.
+    if (!ingredientSearch) {
+        Text(
+            "Found ${recipes.size} recipe(s)",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(8.dp))
+        recipes.forEach { recipe ->
+            card(recipe)
+            Spacer(Modifier.height(10.dp))
         }
         return
     }
@@ -240,16 +203,7 @@ private fun RecipeResults(
         Text(header, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
         grouped.getValue(count).forEach { recipe ->
-            RecipeCard(
-                recipe = recipe,
-                staples = staplesByRecipe[recipe.id].orEmpty(),
-                cardState = cardStates[recipe.id] ?: RecipeCardState(),
-                onCheckAmounts = { onCheckAmounts(recipe.id) },
-                onPrepareConsume = { onPrepareConsume(recipe.id) },
-                onAdjustConsume = { lineIndex, delta -> onAdjustConsume(recipe.id, lineIndex, delta) },
-                onConfirmConsume = { onConfirmConsume(recipe.id) },
-                onDismissConsume = { onDismissConsume(recipe.id) }
-            )
+            card(recipe)
             Spacer(Modifier.height(10.dp))
         }
         Spacer(Modifier.height(8.dp))
@@ -262,6 +216,7 @@ private fun RecipeCard(
     recipe: RecipeByIngredient,
     staples: List<String>,
     cardState: RecipeCardState,
+    showIngredientMatch: Boolean,
     onCheckAmounts: () -> Unit,
     onPrepareConsume: () -> Unit,
     onAdjustConsume: (lineIndex: Int, delta: Int) -> Unit,
@@ -289,44 +244,48 @@ private fun RecipeCard(
                 )
                 Spacer(Modifier.height(6.dp))
 
-                // Status chip: ready vs. how many missing.
-                AssistChip(
-                    onClick = {},
-                    enabled = false,
-                    label = {
-                        Text(if (isReady) "Ready to make" else "Missing ${recipe.missedIngredients.size}")
-                    },
-                    leadingIcon = if (isReady) {
-                        { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                    } else null,
-                    colors = AssistChipDefaults.assistChipColors(
-                        disabledContainerColor = if (isReady)
-                            MaterialTheme.colorScheme.primaryContainer
-                        else
-                            MaterialTheme.colorScheme.tertiaryContainer,
-                        disabledLabelColor = if (isReady)
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        else
-                            MaterialTheme.colorScheme.onTertiaryContainer,
-                        disabledLeadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                // The whole have/missing framing only means something when the
+                // search had ingredient context (see RecipeUiState.ingredientSearch).
+                if (showIngredientMatch) {
+                    // Status chip: ready vs. how many missing.
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = {
+                            Text(if (isReady) "Ready to make" else "Missing ${recipe.missedIngredients.size}")
+                        },
+                        leadingIcon = if (isReady) {
+                            { Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                        } else null,
+                        colors = AssistChipDefaults.assistChipColors(
+                            disabledContainerColor = if (isReady)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.tertiaryContainer,
+                            disabledLabelColor = if (isReady)
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            else
+                                MaterialTheme.colorScheme.onTertiaryContainer,
+                            disabledLeadingIconContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     )
-                )
 
-                if (recipe.usedIngredients.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("You have:", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        recipe.usedIngredients.forEach { IngredientPill(it.name, owned = true) }
+                    if (recipe.usedIngredients.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("You have:", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            recipe.usedIngredients.forEach { IngredientPill(it.name, owned = true) }
+                        }
                     }
-                }
 
-                if (recipe.missedIngredients.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Need:", style = MaterialTheme.typography.labelLarge)
-                    Spacer(Modifier.height(4.dp))
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        recipe.missedIngredients.forEach { IngredientPill(it.name, owned = false) }
+                    if (recipe.missedIngredients.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Need:", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            recipe.missedIngredients.forEach { IngredientPill(it.name, owned = false) }
+                        }
                     }
                 }
 
