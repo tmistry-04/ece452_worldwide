@@ -44,9 +44,17 @@ fun parseReceipt(lines: List<String>): List<ReceiptLine> {
     // This is what a keyword blacklist can't do. Store slogans, street addresses, and
     // manager names are open-ended free text; no list enumerates them, and letting one
     // through means searching Spoonacular for "n florida ave" and getting back agave.
+    // Testing every line rather than only the leading run matters: letterhead is not
+    // always contiguous. A manager name, street address, or "ST# / OP# / TE# / TR#" line
+    // can sit below the first thing that looks priced, and skipping only a prefix lets
+    // all of it through.
+    //
+    // The cost is that a product row whose price OCR misreads is dropped rather than
+    // mis-parsed — a visible gap the user can correct in review, instead of a junk row
+    // that quietly reaches the pantry.
     val end = lines.indexOfFirst { isTotalsLine(it) }.let { if (it < 0) lines.size else it }
     return lines.take(end)
-        .dropWhile { !hasPrice(it) }
+        .filter { hasPrice(it) }
         .mapNotNull(::parseReceiptLine)
 }
 
@@ -141,6 +149,10 @@ internal fun parseReceiptLine(line: String): ReceiptLine? {
     val raw = line.trim().replace(WHITESPACE, " ")
     if (raw.length < MIN_LINE_LENGTH || isBookkeeping(raw)) return null
 
+    // Whether this line carries a price column, which is what licenses the aggressive
+    // lone-letter stripping below.
+    val priced = hasPrice(raw)
+
     var work = raw
     var quantity: Int? = null
 
@@ -202,7 +214,13 @@ internal fun parseReceiptLine(line: String): ReceiptLine? {
         when {
             joinedUnit != null -> unitHint = unitHint ?: joinedUnit
             NUMBER.matches(token) -> Unit                                  // code, count, or price
-            index == tokens.lastIndex && TAX_CODE.matches(token) -> Unit   // trailing tax flag
+            // A lone letter on a priced line is a flag column. No ingredient name
+            // contains a standalone one-letter word, so this is safe — and unlike the
+            // UPC cut above it does not care how OCR tokenized the product code, which
+            // it often splits ("007225 003712"). That split is what let "F" and "N"
+            // survive into the search query as "bread f n".
+            priced && token.length == 1 && token[0].isLetter() -> Unit
+            index == tokens.lastIndex && TAX_CODE.matches(token) -> Unit   // trailing multi-letter flag
             lower in RECEIPT_BRAND_TOKENS -> Unit
             else -> kept += RECEIPT_ABBREVIATIONS[lower] ?: lower
         }

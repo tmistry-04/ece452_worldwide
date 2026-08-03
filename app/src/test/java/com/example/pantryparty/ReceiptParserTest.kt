@@ -249,6 +249,7 @@ class ReceiptParserTest {
         "Manager COLLEEN BRICKEY",
         "8885 N FLORIDA AVE",
         "TAMPA FL 33604",
+        "ST# 5221 OP# 00001061 TE# 06 TR# 05332",
         "BREAD          007225003712  F   2.88 N",
         "BREAD          007225003712  F   2.88 N",
         "GV PNT BUTTR   007874237003  F   3.84 N",
@@ -287,6 +288,25 @@ class ReceiptParserTest {
         assertTrue(raws.none { it.contains("Save money") })
         assertTrue(raws.none { it.contains("Walmart") })
         assertTrue(raws.none { it.contains("TAMPA") })
+        // Regression: letterhead is not contiguous. The register/transaction line sits
+        // below other header rows, so skipping only a leading run let it through.
+        assertTrue(raws.none { it.contains("ST#") })
+    }
+
+    @Test
+    fun aProductCodeSplitByOcr_stillYieldsACleanQuery() {
+        // ML Kit routinely breaks long digit runs into separate tokens, which defeats
+        // the UPC cut. The flag columns must still fall out, or the query goes back to
+        // "bread f n" — the exact failure this whole pass is about.
+        assertEquals("bread", query("BREAD          007225 003712  F   2.88 N"))
+        assertEquals("peanut butter", query("GV PNT BUTTR   007874 237003  F   3.84 N"))
+    }
+
+    @Test
+    fun aLoneLetterIsOnlyStrippedWhenTheLineIsPriced() {
+        // Without a price column there is no flag column to strip, so a short token
+        // stays part of the name.
+        assertEquals("vitamin d milk", query("VITAMIN D MILK"))
     }
 
     @Test

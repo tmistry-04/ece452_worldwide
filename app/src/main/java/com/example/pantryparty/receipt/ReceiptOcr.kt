@@ -1,5 +1,7 @@
 package com.example.pantryparty.receipt
 
+import android.util.Log
+import com.example.pantryparty.BuildConfig
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -16,6 +18,9 @@ import kotlin.coroutines.resume
 private val recognizer by lazy {
     TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 }
+
+/** Logcat tag for the scan pipeline: `adb logcat -s PantryScan`. */
+private const val SCAN_TAG = "PantryScan"
 
 /**
  * Reads receipt rows off a captured frame, top-to-bottom.
@@ -41,7 +46,15 @@ suspend fun recognizeReceiptLines(image: InputImage): Result<List<String>> =
                             )
                         }
                     }
-                continuation.resume(Result.success(rowsFromTextRuns(runs)))
+                val rows = rowsFromTextRuns(runs)
+                // Debug only. Receipt bugs are near-impossible to diagnose from the
+                // review screen alone — it shows the parsed result, not what the model
+                // actually read. `adb logcat -s PantryScan` gives the real input.
+                if (BuildConfig.DEBUG) {
+                    Log.d(SCAN_TAG, "OCR produced ${rows.size} rows:")
+                    rows.forEachIndexed { i, row -> Log.d(SCAN_TAG, "  [$i] $row") }
+                }
+                continuation.resume(Result.success(rows))
             }
             .addOnFailureListener { error ->
                 continuation.resume(Result.failure(error))
