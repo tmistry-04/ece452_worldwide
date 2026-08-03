@@ -16,6 +16,8 @@ coil = "2.7.0"                       # async image loading for recipe/ingredient
 kotlinxSerializationJson = "1.9.0"   # JSON parsing that honors Kotlin default values
 coroutinesTest = "1.10.2"
 desugarJdkLibs = "2.1.5"             # java.time on minSdk 24 (core library desugaring)
+cameraX = "1.6.1"                    # viewfinder + capture for receipt scanning
+mlkitTextRecognition = "16.0.1"      # bundled Latin model: on-device, offline, no API key
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -48,6 +50,13 @@ okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor",
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
+# CameraX: live viewfinder (camera-view) + capture pipeline for receipt scanning.
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "cameraX" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }
+# ML Kit text recognition, bundled model — runs on-device with no network and no key.
+mlkit-text-recognition = { group = "com.google.mlkit", name = "text-recognition", version.ref = "mlkitTextRecognition" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

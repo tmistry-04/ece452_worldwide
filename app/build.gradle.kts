@@ -60,6 +60,14 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)   // nav + action icons
     implementation(libs.coil.compose)                               // recipe/ingredient images
+    implementation(libs.androidx.camera.core)                       // receipt scanning: capture pipeline
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)                       // PreviewView + LifecycleCameraController
+    // On-device OCR. Bundled rather than the play-services- variant so a scan never
+    // waits on a model download — at the cost of ~46 MB of APK, nearly all of it
+    // native OCR libraries across the four ABIs (the model itself is only 1.4 MB).
+    implementation(libs.mlkit.text.recognition)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
