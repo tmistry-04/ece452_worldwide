@@ -89,14 +89,17 @@ fun ReceiptScanDialog(dao: PantryDao, onDismiss: () -> Unit) {
 
                 Box(modifier = Modifier.weight(1f)) {
                     when (val current = state) {
-                        ScanState.Camera -> ReceiptCameraStep(
+                        // Deliberately stays mounted through Processing: unbinding the
+                        // camera while its own capture is still in flight aborts it with
+                        // "Camera is closed". Progress shows as an overlay instead.
+                        ScanState.Camera, ScanState.Processing -> ReceiptCameraStep(
+                            busy = state is ScanState.Processing,
                             onCaptureStarted = viewModel::onCaptureStarted,
                             onLines = viewModel::onLinesRecognized,
                             onFailure = viewModel::onCaptureFailed
                         )
 
-                        ScanState.Processing, is ScanState.Saved ->
-                            BusyStep(if (saving) "Adding to your pantry…" else "Reading your receipt…")
+                        is ScanState.Saved -> BusyStep("Adding to your pantry…")
 
                         is ScanState.Failed -> FailedStep(
                             message = current.message,

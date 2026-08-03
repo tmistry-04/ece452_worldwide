@@ -17,6 +17,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -59,9 +61,14 @@ import kotlinx.coroutines.launch
  *
  * OCR happens here rather than in the ViewModel so the ViewModel never has to know
  * about ML Kit or CameraX — it just receives [onLines].
+ *
+ * [busy] means a capture is being read. The caller must keep this composable mounted for
+ * the whole of it: leaving the composition unbinds the camera, which aborts the in-flight
+ * capture and cancels the coroutine running OCR.
  */
 @Composable
 fun ReceiptCameraStep(
+    busy: Boolean,
     onCaptureStarted: () -> Unit,
     onLines: (List<String>) -> Unit,
     onFailure: (String) -> Unit
@@ -80,6 +87,7 @@ fun ReceiptCameraStep(
 
     if (granted) {
         CameraViewfinder(
+            busy = busy,
             onCaptureStarted = onCaptureStarted,
             onLines = onLines,
             onFailure = onFailure
@@ -128,6 +136,7 @@ private fun CameraPermissionRationale(onGrant: () -> Unit) {
 @OptIn(ExperimentalGetImage::class)
 @Composable
 private fun CameraViewfinder(
+    busy: Boolean,
     onCaptureStarted: () -> Unit,
     onLines: (List<String>) -> Unit,
     onFailure: (String) -> Unit
@@ -178,12 +187,38 @@ private fun CameraViewfinder(
             )
             Spacer(Modifier.height(12.dp))
             CaptureButton(
+                enabled = !busy,
                 onClick = {
                     onCaptureStarted()
                     controller.capture(context, scope, onLines, onFailure)
                 }
             )
         }
+
+        // Last child, so it covers the preview and the framing guide.
+        if (busy) {
+            ReadingOverlay()
+        }
+    }
+}
+
+/** Progress shown over the still-live viewfinder while the capture is being read. */
+@Composable
+private fun ReadingOverlay() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.6f)),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CircularProgressIndicator(color = Color.White)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            "Reading your receipt…",
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.White
+        )
     }
 }
 
@@ -202,7 +237,7 @@ private fun ReceiptFramingGuide(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CaptureButton(onClick: () -> Unit) {
+private fun CaptureButton(enabled: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(72.dp)
@@ -213,9 +248,10 @@ private fun CaptureButton(onClick: () -> Unit) {
     ) {
         Button(
             onClick = onClick,
+            enabled = enabled,
             modifier = Modifier.fillMaxSize(),
             shape = CircleShape,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)
+            contentPadding = PaddingValues(0.dp)
         ) {
             Icon(
                 Icons.Filled.PhotoCamera,
