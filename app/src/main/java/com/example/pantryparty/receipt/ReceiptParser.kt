@@ -12,7 +12,14 @@ data class ReceiptLine(
     val raw: String,
     val query: String,
     val quantity: Int,
-    val unitHint: String?
+    val unitHint: String?,
+    /**
+     * The product code printed on the line, when the receipt prints one (Walmart does,
+     * most Canadian chains don't). Exact, so it is the reliable key for merging the
+     * repeated lines a multi-unit purchase produces — and the natural lookup key if the
+     * Spoonacular UPC endpoint is ever wired up.
+     */
+    val upc: String? = null
 )
 
 /**
@@ -28,7 +35,27 @@ data class ReceiptLine(
  * query, not a correct one. Every result is confirmed by the user before anything is
  * written to the pantry, so a wrong guess costs a tap and a missed line costs nothing.
  */
-fun parseReceipt(lines: List<String>): List<ReceiptLine> = lines.mapNotNull(::parseReceiptLine)
+fun parseReceipt(lines: List<String>): List<ReceiptLine> {
+    // Scope to the product region before looking at any line individually. A receipt has
+    // three parts: letterhead, products, totals. Only products carry a price column, and
+    // the totals block always opens with a subtotal — so the region is findable
+    // structurally.
+    //
+    // This is what a keyword blacklist can't do. Store slogans, street addresses, and
+    // manager names are open-ended free text; no list enumerates them, and letting one
+    // through means searching Spoonacular for "n florida ave" and getting back agave.
+    val end = lines.indexOfFirst { isTotalsLine(it) }.let { if (it < 0) lines.size else it }
+    return lines.take(end)
+        .dropWhile { !hasPrice(it) }
+        .mapNotNull(::parseReceiptLine)
+}
+
+/** A price column marks a line as a product row rather than letterhead. */
+private fun hasPrice(line: String): Boolean = PRICE.containsMatchIn(line)
+
+/** The opening of the totals block; everything from here down is bookkeeping. */
+private fun isTotalsLine(line: String): Boolean =
+    line.lowercase().split(NON_WORD).any { it == "subtotal" || it == "sous" }
 
 // A line shorter than this, or with fewer letters than this, is a rule, a barcode, or
 // a date — never an item name.
@@ -63,8 +90,25 @@ private val NUMBER = Regex("^\\d+(?:[.,]\\d+)?$")
 /** A size token, joined ("1.2KG") or split ("1.2 KG"). */
 private val SIZE = Regex("^(\\d+(?:[.,]\\d+)?)\\s*([A-Za-z]+)$")
 
-/** Trailing tax/category flags: "H", "M", "HM", "FT". Only meaningful at line end. */
+/**
+ * Trailing tax/category flags: "H", "M", "HM", "FT". Only meaningful at line end.
+ *
+ * The alphabet stays deliberately narrow. Widening it to all letters would strip real
+ * three-letter foods — OIL, HAM, TEA, JAM, PIE — that can end a line legitimately.
+ * Receipts that print flags *mid*-line (Walmart) put them after the product code, so
+ * the UPC truncation below removes those without needing a looser pattern here.
+ */
 private val TAX_CODE = Regex("^[HMFTRJW]{1,3}$")
+
+/**
+ * A product code: an unbroken run of 8+ digits. Long enough that no price, count, or
+ * size can collide with it, and it marks where the printed description ends — everything
+ * after it on the line is columns, not name.
+ */
+private val UPC = Regex("^\\d{8,}$")
+
+/** A price column — the tell that a line is a product row rather than store letterhead. */
+private val PRICE = Regex("\\d+[.,]\\d{2}(?:\\s|$)")
 
 /** A clock time — the reliable tell for a date/time stamp line. */
 private val TIME = Regex("\\d{1,2}:\\d{2}")
@@ -107,14 +151,37 @@ internal fun parseReceiptLine(line: String): ReceiptLine? {
         work = work.replaceRange(match.range, " ").trim()
     }
     if (quantity == null) {
-        val match = LEADING_QTY.find(work) ?: TRAILING_QTY.find(work) ?: LEADING_COUNT.find(work)
-        match?.let {
-            quantity = it.groupValues[1].toIntOrNull()
-            work = work.replaceRange(it.range, " ").trim()
+        val explicit = LEADING_QTY.find(work) ?: TRAILING_QTY.find(work)
+        if (explicit != null) {
+            quantity = explicit.groupValues[1].toIntOrNull()
+            work = work.replaceRange(explicit.range, " ").trim()
+        } else {
+            LEADING_COUNT.find(work)?.let { match ->
+                // A bare leading number is only a count when a unit word doesn't follow
+                // it: "12 CT NITRIL" is one twelve-count box, not twelve boxes, and
+                // "6 PK" is one six-pack. Left unguarded this multiplies the pantry by
+                // the package size. Leaving it in place lets the size token below read
+                // it as a unit hint instead.
+                val next = work.substring(match.range.last + 1)
+                    .trim().split(WHITESPACE).firstOrNull()?.lowercase()
+                if (next == null || next !in UNIT_HINTS) {
+                    quantity = match.groupValues[1].toIntOrNull()
+                    work = work.replaceRange(match.range, " ").trim()
+                }
+            }
         }
     }
 
-    val tokens = work.split(WHITESPACE).map { it.trim(*TRIM_CHARS.toCharArray()) }.filter { it.isNotEmpty() }
+    val allTokens = work.split(WHITESPACE).map { it.trim(*TRIM_CHARS.toCharArray()) }.filter { it.isNotEmpty() }
+
+    // On a receipt that prints product codes, the printed description is everything
+    // *before* the code — the rest of the line is columns (flags, price, more flags).
+    // Cutting there is what stops "BREAD <upc> F 2.88 N" from being searched as
+    // "bread f n", which Spoonacular happily fuzzy-matches to something unrelated.
+    val upcIndex = allTokens.indexOfFirst { UPC.matches(it) }
+    val upc = allTokens.getOrNull(upcIndex.takeIf { it >= 0 } ?: -1)
+    val tokens = if (upcIndex > 0) allTokens.take(upcIndex) else allTokens
+
     val kept = mutableListOf<String>()
     var unitHint: String? = null
     var index = 0
@@ -144,7 +211,13 @@ internal fun parseReceiptLine(line: String): ReceiptLine? {
 
     val query = kept.joinToString(" ").trim()
     if (query.isEmpty()) return null
-    return ReceiptLine(raw = raw, query = query, quantity = quantity ?: 1, unitHint = unitHint)
+    return ReceiptLine(
+        raw = raw,
+        query = query,
+        quantity = quantity ?: 1,
+        unitHint = unitHint,
+        upc = upc
+    )
 }
 
 /**

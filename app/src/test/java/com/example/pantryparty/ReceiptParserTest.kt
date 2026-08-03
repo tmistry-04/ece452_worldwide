@@ -5,6 +5,7 @@ import com.example.pantryparty.receipt.parseReceipt
 import com.example.pantryparty.receipt.parseReceiptLine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -231,6 +232,112 @@ class ReceiptParserTest {
         )
         assertEquals(listOf(1, 1, 3), items.map { it.quantity })
         assertEquals(listOf("kg", null, null), items.map { it.unitHint })
+    }
+
+    // --- Walmart: product codes, flag columns, letterhead ---------------------
+
+    /**
+     * A real Walmart receipt, verbatim. Walmart is structurally unlike the Canadian
+     * chains above: it prints a UPC and *two* flag columns per line, and its letterhead
+     * carries free text (slogan, manager, street address) that no keyword list can
+     * anticipate.
+     */
+    private val walmartReceipt = listOf(
+        "Walmart",
+        "Save money. Live better.",
+        "(813) 932-0562",
+        "Manager COLLEEN BRICKEY",
+        "8885 N FLORIDA AVE",
+        "TAMPA FL 33604",
+        "BREAD          007225003712  F   2.88 N",
+        "BREAD          007225003712  F   2.88 N",
+        "GV PNT BUTTR   007874237003  F   3.84 N",
+        "GV PNT BUTTR   007874237003  F   3.84 N",
+        "GV PNT BUTTR   007874237003  F   3.84 N",
+        "GV PNT BUTTR   007874237003  F   3.84 N",
+        "GV PORK 16OZ   007874201510  F   4.98 O",
+        "GV CHNK CHKN   007874206784  F   1.98 N",
+        "GV CHNK CHKN   007874206784  F   1.98 N",
+        "12 CT NITRIL   073191913822      2.78 X",
+        "FOLGERS        002550000377  F  10.48 N",
+        "SC TWIST UP    007874222682  F   0.84 X",
+        "EGGS           060538871459  F   1.88 O",
+        "SUBTOTAL                            46.04",
+        "TAX 1                7.000%          0.26",
+        "TOTAL                               46.30",
+        "# ITEMS SOLD 13"
+    )
+
+    @Test
+    fun productCodeTruncatesTheLine_soFlagColumnsNeverReachTheQuery() {
+        // Regression: the flag columns used to survive as words, so this line was
+        // searched as "bread f n" — which fuzzy-matched to an unrelated pasta.
+        val line = parsed("BREAD          007225003712  F   2.88 N")
+        assertEquals("bread", line.query)
+        assertEquals("007225003712", line.upc)
+    }
+
+    @Test
+    fun letterheadNeverBecomesAProduct() {
+        val raws = parseReceipt(walmartReceipt).map { it.raw }
+        // The address line is the dangerous one: it survived as "n florida ave", whose
+        // last token then fell back to "ave" and matched agave.
+        assertTrue(raws.none { it.contains("FLORIDA") })
+        assertTrue(raws.none { it.contains("COLLEEN") })
+        assertTrue(raws.none { it.contains("Save money") })
+        assertTrue(raws.none { it.contains("Walmart") })
+        assertTrue(raws.none { it.contains("TAMPA") })
+    }
+
+    @Test
+    fun nothingFromTheTotalsBlockSurvives() {
+        val raws = parseReceipt(walmartReceipt).map { it.raw }
+        assertTrue(raws.none { it.contains("SUBTOTAL") })
+        assertTrue(raws.none { it.contains("TAX") })
+        assertTrue(raws.none { it.contains("TOTAL") })
+        assertTrue(raws.none { it.contains("ITEMS SOLD") })
+    }
+
+    @Test
+    fun everyParsedLineIsAnActualProductRow() {
+        // 13 printed product lines; grouping into 8 distinct items happens downstream.
+        assertEquals(13, parseReceipt(walmartReceipt).size)
+    }
+
+    @Test
+    fun walmartShorthandExpands() {
+        assertEquals("peanut butter", query("GV PNT BUTTR   007874237003  F   3.84 N"))
+        assertEquals("chunk chicken", query("GV CHNK CHKN   007874206784  F   1.98 N"))
+        assertEquals("eggs", query("EGGS           060538871459  F   1.88 O"))
+    }
+
+    @Test
+    fun aCountFollowedByAUnitWord_isAPackageSizeNotAQuantity() {
+        // "12 CT NITRIL" is one twelve-count box. Read as a quantity it would add
+        // twelve boxes to the pantry.
+        val line = parsed("12 CT NITRIL   073191913822      2.78 X")
+        assertEquals(1, line.quantity)
+        assertEquals("piece", line.unitHint)
+        assertEquals("nitril", line.query)
+    }
+
+    @Test
+    fun groupedQuantitiesMatchTheReceiptsOwnItemCount() {
+        // The receipt footer says "# ITEMS SOLD 13" — the parsed quantities must agree,
+        // which is the end-to-end check that no line is dropped, duplicated, or
+        // multiplied by its package size.
+        val lines = parseReceipt(walmartReceipt)
+        val grouped = lines.groupBy { it.upc ?: it.query }
+            .map { (_, g) -> g.sumOf { it.quantity } }
+        assertEquals(8, grouped.size)
+        assertEquals(13, grouped.sum())
+    }
+
+    @Test
+    fun packageSizeBeforeTheProductCode_isStillReadAsAUnit() {
+        val line = parsed("GV PORK 16OZ   007874201510  F   4.98 O")
+        assertEquals("pork", line.query)
+        assertEquals("oz", line.unitHint)
     }
 
     // --- raw text is always preserved -----------------------------------------

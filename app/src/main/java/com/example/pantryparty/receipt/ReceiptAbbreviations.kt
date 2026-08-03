@@ -99,6 +99,7 @@ internal val RECEIPT_ABBREVIATIONS: Map<String, String> = mapOf(
     // --- meat & fish ---
     "chkn" to "chicken",
     "chk" to "chicken",
+    "chnk" to "chunk",
     "brst" to "breast",
     "thgh" to "thigh",
     "grnd" to "ground",
@@ -123,6 +124,7 @@ internal val RECEIPT_ABBREVIATIONS: Map<String, String> = mapOf(
     "yog" to "yogurt",
     "ygrt" to "yogurt",
     "btr" to "butter",
+    "buttr" to "butter",
     "crm" to "cream",
     "sr" to "sour",
     "brd" to "bread",

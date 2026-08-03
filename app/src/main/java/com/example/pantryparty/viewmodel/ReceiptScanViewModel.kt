@@ -129,10 +129,26 @@ class ReceiptScanViewModel(
         _state.value = ScanState.Processing
         viewModelScope.launch {
             lookupFailure = null
-            val rows = resolveAll(candidates)
+            val rows = resolveAll(groupDuplicates(candidates))
             _state.value = ScanState.Review(rows = rows, warning = lookupFailure)
         }
     }
+
+    /**
+     * Merges the repeated lines a multi-unit purchase produces.
+     *
+     * Receipts print one line per unit, so buying four jars of peanut butter prints four
+     * identical lines — which would otherwise become four separate review cards the user
+     * has to confirm one at a time, and four identical ingredient lookups.
+     *
+     * Keyed on the product code where the receipt prints one, because it is exact; the
+     * cleaned query is the fallback for receipts that don't. Merging on the *raw* line
+     * would fail here, since the price column can differ between two lines for the same
+     * item.
+     */
+    private fun groupDuplicates(lines: List<ReceiptLine>): List<ReceiptLine> =
+        lines.groupBy { it.upc ?: it.query }
+            .map { (_, group) -> group.first().copy(quantity = group.sumOf { it.quantity }) }
 
     /**
      * Resolves candidates in small parallel batches.
@@ -160,21 +176,35 @@ class ReceiptScanViewModel(
             confident = match != null &&
                 normalizeIngredientName(match.name) == normalizeIngredientName(line.query),
             quantity = line.quantity.toString(),
-            // Honour the size printed on the receipt when the ingredient supports it.
-            unit = line.unitHint?.takeIf { it in units } ?: units.first(),
+            // Honour the size printed on the receipt when the ingredient supports it,
+            // otherwise prefer a package-style unit. A receipt row is a thing the user
+            // carried home, not a measured amount — falling straight through to
+            // possibleUnits.first() lands on a raw weight for most foods and shows
+            // "1 g" of bread.
+            unit = line.unitHint?.takeIf { it in units }
+                ?: units.firstOrNull { it in PACKAGE_LIKE_UNITS }
+                ?: units.first(),
             unitOptions = units,
             include = match != null
         )
     }
 
-    /** Prefers an exact ingredient-name hit, else the API's own top suggestion. */
+    /**
+     * Prefers an exact ingredient-name hit, else the API's top suggestion — but only if
+     * it actually resembles what was asked for.
+     *
+     * Autocomplete always answers with *something*, so an unfiltered `firstOrNull()`
+     * turns any junk query into a confident-looking card: a street address ending in
+     * "AVE" comes back as agave. Requiring a shared token means a bad query lands as
+     * "No match found" and stays unchecked in review, which is the honest outcome.
+     */
     private fun bestMatch(
         query: String,
         suggestions: List<IngredientAutocomplete>
     ): IngredientAutocomplete? {
         val normalized = normalizeIngredientName(query)
         return suggestions.firstOrNull { normalizeIngredientName(it.name) == normalized }
-            ?: suggestions.firstOrNull()
+            ?: suggestions.firstOrNull { sharesToken(normalized, normalizeIngredientName(it.name)) }
     }
 
     /** Tries the full query, then progressively looser ones, stopping at the first hit. */
@@ -303,6 +333,33 @@ class ReceiptScanViewModel(
          * the 5 s budget without hammering a free-tier key shared by the whole team.
          */
         private const val LOOKUP_CONCURRENCY = 6
+
+        /**
+         * Units that describe a thing rather than an amount of it. Preferred when the
+         * receipt printed no size, since a receipt line is a purchased package.
+         */
+        private val PACKAGE_LIKE_UNITS = setOf("piece", "package", "serving", "item", "unit")
+
+        /** Shortest prefix overlap that counts as a real relationship between two words. */
+        private const val MIN_TOKEN_OVERLAP = 4
+
+        /**
+         * True when the query and a candidate name share a word.
+         *
+         * Prefix-tolerant so ordinary plurals and inflections still match ("banana"
+         * against "bananas"), with a length floor that stops incidental overlaps from
+         * qualifying — "ave" is not agave, and a stray flag letter is not a food.
+         */
+        internal fun sharesToken(query: String, name: String): Boolean {
+            val nameTokens = name.split(" ").filter { it.isNotBlank() }
+            return query.split(" ").filter { it.isNotBlank() }.any { q ->
+                nameTokens.any { n ->
+                    val shorter = minOf(q.length, n.length)
+                    shorter >= MIN_TOKEN_OVERLAP &&
+                        (q.startsWith(n.take(shorter)) && n.startsWith(q.take(shorter)))
+                }
+            }
+        }
 
         /** Shorter than this and autocomplete just returns noise. */
         private const val MIN_QUERY_LENGTH = 2

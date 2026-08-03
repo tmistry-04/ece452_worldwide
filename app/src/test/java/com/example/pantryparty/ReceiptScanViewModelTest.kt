@@ -134,16 +134,19 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun repeatedQueries_areLookedUpOnce() = runTest {
+    fun repeatedLines_collapseIntoOneRowWithTheSummedQuantity() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("milk" to ingredient(1, "milk"))
         val vm = viewModel(FakePantryDao(), repo)
 
+        // A receipt prints one line per unit bought, so three lines is a quantity of
+        // three — not three separate things to confirm.
         vm.onLinesRecognized(listOf("MILK      4.99", "MILK      4.99", "MILK      4.99"))
         advanceUntilIdle()
 
-        assertEquals(3, review(vm.state.value).rows.size)
-        assertEquals("the cache should collapse identical lookups", 1, repo.autocompleteCalls)
+        val row = review(vm.state.value).rows.single()
+        assertEquals("3", row.quantity)
+        assertEquals("the grouped row should be looked up once", 1, repo.autocompleteCalls)
     }
 
     @Test
@@ -299,7 +302,7 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun twoLinesOfTheSameIngredient_becomeTwoLotsOnOneRow() = runTest {
+    fun twoLinesOfTheSameIngredient_becomeOneLotOfTwo() = runTest {
         val dao = FakePantryDao()
         val repo = FakeSpoonacularRepository()
         repo.answer("milk" to ingredient(1, "milk"))
@@ -310,8 +313,54 @@ class ReceiptScanViewModelTest {
         vm.confirmAll()
         advanceUntilIdle()
 
+        // Both lines came off one receipt, so they share a purchase date and expiry —
+        // one lot of two, not two lots of one.
         assertEquals(1, dao.itemsSnapshot().size)
-        assertEquals(2, dao.transactionsSnapshot().size)
+        val lot = dao.transactionsSnapshot().single()
+        assertEquals(2, lot.amountBought)
+    }
+
+    // --- match quality --------------------------------------------------------
+
+    @Test
+    fun aSuggestionSharingNoWordWithTheQuery_isRejected() = runTest {
+        val repo = FakeSpoonacularRepository()
+        // What autocomplete actually did with a street address ending in "AVE".
+        repo.answer("n florida ave" to ingredient(9, "agave"))
+        val vm = viewModel(FakePantryDao(), repo)
+
+        vm.onLinesRecognized(listOf("8885 N FLORIDA AVE   1.00"))
+        advanceUntilIdle()
+
+        val row = review(vm.state.value).rows.single()
+        assertNull("a coincidental substring is not a match", row.match)
+        assertFalse(row.include)
+    }
+
+    @Test
+    fun ordinaryPlurals_stillMatch() = runTest {
+        val repo = FakeSpoonacularRepository()
+        repo.answer("bananas" to ingredient(2, "banana"))
+        val vm = viewModel(FakePantryDao(), repo)
+
+        vm.onLinesRecognized(listOf("BANANAS   1.82"))
+        advanceUntilIdle()
+
+        // The similarity gate must not be so strict that it rejects real matches.
+        assertEquals("banana", review(vm.state.value).rows.single().match?.name)
+    }
+
+    @Test
+    fun withNoPrintedSize_aPackageUnitIsPreferredOverRawWeight() = runTest {
+        val repo = FakeSpoonacularRepository()
+        repo.answer("bread" to ingredient(3, "bread", listOf("g", "kg", "piece")))
+        val vm = viewModel(FakePantryDao(), repo)
+
+        vm.onLinesRecognized(listOf("BREAD   2.88"))
+        advanceUntilIdle()
+
+        // Was "g" — a loaf of bread measured in grams the user never weighed.
+        assertEquals("piece", review(vm.state.value).rows.single().unit)
     }
 
     // --- fallback query construction -----------------------------------------
