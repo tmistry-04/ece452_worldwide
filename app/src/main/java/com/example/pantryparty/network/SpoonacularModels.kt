@@ -54,7 +54,14 @@ data class RecipeInformation(
     val extendedIngredients: List<ExtendedIngredient> = emptyList()
 )
 
-/** A required ingredient with its amount/unit; `id` matches CatalogItem.spoonacularId. */
+/**
+ * A required ingredient with its amount/unit.
+ *
+ * `id` is *not* reliably the same id `food/ingredients/autocomplete` gives a pantry
+ * row: a recipe may say 1145 ("unsalted butter") where autocomplete said 1001
+ * ("butter"). `name` is the canonical name and agrees across both endpoints, so
+ * matching falls back to it — see PantryIndex in RecipeMatcher.kt.
+ */
 @Serializable
 data class ExtendedIngredient(
     val id: Int,

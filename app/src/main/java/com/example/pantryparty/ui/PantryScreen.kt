@@ -82,6 +82,8 @@ fun PantryScreen(dao: PantryDao) {
     val useDraft by viewModel.useDraft.collectAsStateWithLifecycle()
     val detail by viewModel.detail.collectAsStateWithLifecycle()
     val txnDraft by viewModel.txnDraft.collectAsStateWithLifecycle()
+    val staples by viewModel.staples.collectAsStateWithLifecycle()
+    val stapleEditor by viewModel.stapleEditor.collectAsStateWithLifecycle()
 
     // Purely visual confirmation step, so it stays local UI state.
     var confirmDeleteItem by remember { mutableStateOf<CatalogItem?>(null) }
@@ -110,6 +112,19 @@ fun PantryScreen(dao: PantryDao) {
                     Icon(Icons.Filled.Add, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text("Add item")
+                }
+            }
+            item(key = "staples") {
+                FilledTonalButton(
+                    onClick = viewModel::openStaples,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Check, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (staples.isEmpty()) "Always have…"
+                        else "Always have (${staples.size})"
+                    )
                 }
             }
         }
@@ -141,6 +156,17 @@ fun PantryScreen(dao: PantryDao) {
     }
 
     // ---- dialogs & modals (each shows only while its draft/state is open) ----
+
+    stapleEditor?.let { state ->
+        StaplesEditorDialog(
+            state = state,
+            staples = staples,
+            onQueryChange = viewModel::onStapleQueryChange,
+            onAdd = viewModel::addStaple,
+            onRemove = viewModel::removeStaple,
+            onDismiss = viewModel::dismissStaples
+        )
+    }
 
     itemEditor?.let { state ->
         ItemEditorDialog(

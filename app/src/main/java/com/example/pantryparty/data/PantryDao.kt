@@ -3,6 +3,7 @@ package com.example.pantryparty.data
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
@@ -73,4 +74,21 @@ interface PantryDao {
     /** Clears one item's entire history (its stock drops to zero). */
     @Query("DELETE FROM pantry_transactions WHERE catalogItemId = :itemId")
     suspend fun clearTransactions(itemId: Long)
+
+    // ---- staples ("always have") -------------------------------------------
+
+    /** The user's staples, alphabetical; re-emits as they're added or removed. */
+    @Query("SELECT * FROM staple_ingredients ORDER BY name")
+    fun observeStaples(): Flow<List<StapleIngredient>>
+
+    /** One-shot snapshot of the staples (used by the recipe checks). */
+    @Query("SELECT * FROM staple_ingredients ORDER BY name")
+    suspend fun getStaples(): List<StapleIngredient>
+
+    /** Re-adding the same ingredient replaces its row rather than failing. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStaple(staple: StapleIngredient)
+
+    @Delete
+    suspend fun deleteStaple(staple: StapleIngredient)
 }

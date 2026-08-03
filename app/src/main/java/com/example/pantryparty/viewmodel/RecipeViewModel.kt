@@ -17,6 +17,7 @@ import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.PantryConsumer
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
+import com.example.pantryparty.recipe.StapleSet
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -86,6 +87,13 @@ class RecipeViewModel(
     /** One-shot equivalent of [pantry] for the on-demand checks. */
     private suspend fun stockSnapshot(): List<StockItem> =
         PantryMath.stockSnapshot(dao.getCatalog(), dao.getTransactions())
+
+    /**
+     * The user's "always have" list as the matcher's lookup set. Read fresh per check
+     * so edits made in the Pantry tab take effect without re-running the search.
+     */
+    private suspend fun alwaysHave(): StapleSet =
+        StapleSet.of(dao.getStaples().map { it.spoonacularId to it.name })
 
     private val _uiState = MutableStateFlow(RecipeUiState())
     val uiState: StateFlow<RecipeUiState> = _uiState.asStateFlow()
@@ -180,13 +188,20 @@ class RecipeViewModel(
      */
     private suspend fun loadStaples(recipes: List<RecipeByIngredient>) {
         if (recipes.isEmpty()) return
+        // Same inputs the amount check uses, so the card's staple list matches exactly
+        // what gets skipped.
+        val pantrySnapshot = stockSnapshot()
+        val alwaysHave = alwaysHave()
         repository.getRecipeInformationBulk(recipes.map { it.id })
             .onSuccess { infos ->
                 detailsById = infos.associateBy { it.id }
                 val staples = recipes.associate { r ->
                     val info = detailsById[r.id]
                     val nonStaple = (r.usedIngredients + r.missedIngredients).map { it.id }.toSet()
-                    r.id to (info?.let { RecipeMatcher.staplesOf(it, nonStaple).map { ing -> ing.name } } ?: emptyList())
+                    r.id to (info?.let {
+                        RecipeMatcher.staplesOf(pantrySnapshot, it, nonStaple, alwaysHave)
+                            .map { ing -> ing.name }
+                    } ?: emptyList())
                 }
                 _uiState.update { it.copy(staplesByRecipe = staples) }
             }
@@ -219,9 +234,12 @@ class RecipeViewModel(
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
             val pantrySnapshot = stockSnapshot()
             val nonStaple = nonStapleIds(recipeId)
+            val alwaysHave = alwaysHave()
             recipeDetails(recipeId)
                 .onSuccess { info ->
-                    val match = info?.let { RecipeMatcher.match(pantrySnapshot, it, nonStaple) }
+                    val match = info?.let {
+                        RecipeMatcher.match(pantrySnapshot, it, nonStaple, alwaysHave)
+                    }
                     updateCard(recipeId) { it.copy(amountCheck = match, checking = false) }
                 }
                 .onFailure { e -> updateCard(recipeId) { it.copy(checkError = friendlyApiError(e), checking = false) } }
@@ -234,10 +252,11 @@ class RecipeViewModel(
             updateCard(recipeId) { it.copy(checking = true, checkError = null) }
             val pantrySnapshot = stockSnapshot()
             val nonStaple = nonStapleIds(recipeId)
+            val alwaysHave = alwaysHave()
             recipeDetails(recipeId)
                 .onSuccess { info ->
                     val draft = info
-                        ?.let { PantryConsumer.plan(pantrySnapshot, it, nonStaple) }
+                        ?.let { PantryConsumer.plan(pantrySnapshot, it, nonStaple, alwaysHave) }
                         ?.let { plan -> ConsumeDraft(plan, plan.lines.map { it.suggested }) }
                     updateCard(recipeId) { it.copy(consume = draft, checking = false) }
                 }

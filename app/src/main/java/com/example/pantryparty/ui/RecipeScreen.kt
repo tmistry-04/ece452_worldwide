@@ -507,11 +507,30 @@ private fun AmountDetail(match: RecipeMatch) {
         }
         return
     }
-    Text("Short on:", style = MaterialTheme.typography.labelLarge)
-    match.missing.forEach { m ->
-        val need = formatAmount(m.required.amount, m.required.unit, m.required.name)
-        val haveNote = if (m.haveQuantity != null) "  (have ${m.haveQuantity} ${m.haveUnit})" else ""
-        Text("• $need$haveNote", style = MaterialTheme.typography.bodySmall)
+    // `missing` holds two different states and they must not share a heading: an
+    // ingredient you hold too little of, and one you don't have at all. Lumping them
+    // together made an absent ingredient read as "Short on: 50 g butter" — the amount
+    // the recipe wants — which looks like a shortfall against stock you have.
+    val (short, absent) = match.missing.partition { it.haveQuantity != null }
+
+    if (short.isNotEmpty()) {
+        Text("Short on:", style = MaterialTheme.typography.labelLarge)
+        short.forEach { m ->
+            val need = formatAmount(m.required.amount, m.required.unit, m.required.name)
+            Text(
+                "• $need  (have ${m.haveQuantity} ${m.haveUnit})",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+    if (absent.isNotEmpty()) {
+        if (short.isNotEmpty()) Spacer(Modifier.height(6.dp))
+        // Same wording as the "I made this" dialog, so the two screens agree.
+        Text("Not in your pantry:", style = MaterialTheme.typography.labelLarge)
+        absent.forEach { m ->
+            val need = formatAmount(m.required.amount, m.required.unit, m.required.name)
+            Text("• $need", style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 

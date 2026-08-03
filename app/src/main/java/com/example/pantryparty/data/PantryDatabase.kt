@@ -8,11 +8,13 @@ import androidx.room.RoomDatabase
 // v7: pantry overhaul — the single pantry_items table is replaced by a catalog
 // of desired items (catalog_items) plus a purchase/usage ledger
 // (pantry_transactions) that stock is derived from.
+// v8: staple_ingredients — the user's "always have" list, which overrides
+// Spoonacular's guess at which recipe ingredients can be assumed on hand.
 // Destructive migration is configured below, so the bump just resets local data —
 // no hand-written migration needed.
 @Database(
-    entities = [CatalogItem::class, PantryTransaction::class],
-    version = 7,
+    entities = [CatalogItem::class, PantryTransaction::class, StapleIngredient::class],
+    version = 8,
     exportSchema = false
 )
 abstract class PantryDatabase : RoomDatabase() {

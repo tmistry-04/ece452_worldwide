@@ -3,6 +3,7 @@ package com.example.pantryparty.fakes
 import com.example.pantryparty.data.CatalogItem
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryTransaction
+import com.example.pantryparty.data.StapleIngredient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
@@ -17,6 +18,7 @@ class FakePantryDao : PantryDao {
 
     private val items = MutableStateFlow<List<CatalogItem>>(emptyList())
     private val txns = MutableStateFlow<List<PantryTransaction>>(emptyList())
+    private val staples = MutableStateFlow<List<StapleIngredient>>(emptyList())
     private var nextItemId = 1L
     private var nextTxnId = 1L
 
@@ -96,4 +98,20 @@ class FakePantryDao : PantryDao {
 
     override suspend fun clearTransactions(itemId: Long) =
         txns.update { list -> list.filterNot { it.catalogItemId == itemId } }
+
+    // ---- staples ("always have") -------------------------------------------
+
+    override fun observeStaples(): Flow<List<StapleIngredient>> = staples
+
+    override suspend fun getStaples(): List<StapleIngredient> = staples.value
+
+    /** Mirrors OnConflictStrategy.REPLACE on the spoonacularId primary key. */
+    override suspend fun insertStaple(staple: StapleIngredient) =
+        staples.update { list ->
+            (list.filterNot { it.spoonacularId == staple.spoonacularId } + staple)
+                .sortedBy { it.name }
+        }
+
+    override suspend fun deleteStaple(staple: StapleIngredient) =
+        staples.update { list -> list.filterNot { it.spoonacularId == staple.spoonacularId } }
 }

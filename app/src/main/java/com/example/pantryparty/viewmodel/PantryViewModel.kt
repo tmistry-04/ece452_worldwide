@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.pantryparty.data.CatalogItem
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.data.PantryTransaction
+import com.example.pantryparty.data.StapleIngredient
 import com.example.pantryparty.network.IngredientAutocomplete
 import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.network.SpoonacularRepositoryImpl
@@ -118,6 +119,18 @@ data class ItemEditorState(
 }
 
 /**
+ * State of the "Always have" editor. Just a search box over the same ingredient
+ * autocomplete the item editor uses — staples carry no amount, unit or expiry, so
+ * picking a suggestion saves it immediately.
+ */
+data class StapleEditorState(
+    val query: String = "",
+    val suggestions: List<IngredientAutocomplete> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null
+)
+
+/**
  * Owns the Pantry tab: the catalog rows with their derived stock/expiry/score,
  * edit mode, and the drafts behind every dialog (buy, use, item editor,
  * transaction editor). All writes go through here; no composable touches the
@@ -185,6 +198,65 @@ class PantryViewModel(
         }
     }
 
+    // ---- staples ("always have") -------------------------------------------
+
+    /** The user's staples, alphabetical. Empty until they add some. */
+    val staples: StateFlow<List<StapleIngredient>> =
+        dao.observeStaples().stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyList()
+        )
+
+    private val _stapleEditor = MutableStateFlow<StapleEditorState?>(null)
+    val stapleEditor: StateFlow<StapleEditorState?> = _stapleEditor.asStateFlow()
+
+    fun openStaples() {
+        autocompleteJob?.cancel()
+        _stapleEditor.value = StapleEditorState()
+    }
+
+    fun dismissStaples() {
+        autocompleteJob?.cancel()
+        _stapleEditor.value = null
+    }
+
+    /** Same debounce rules as the item editor's search. */
+    fun onStapleQueryChange(query: String) {
+        autocompleteJob?.cancel()
+        if (_stapleEditor.value == null) return
+        val searchable = query.trim().length >= 2
+        _stapleEditor.update {
+            if (searchable) it?.copy(query = query)
+            else it?.copy(query = query, suggestions = emptyList(), loading = false, error = null)
+        }
+        if (!searchable) return
+        searchIngredients(
+            query = query,
+            onLoading = { _stapleEditor.update { it?.copy(loading = true, error = null) } },
+            onResult = { result -> _stapleEditor.update { it?.copy(suggestions = result, loading = false) } },
+            onError = { msg -> _stapleEditor.update { it?.copy(error = msg, loading = false) } }
+        )
+    }
+
+    /**
+     * Adds a staple and clears the search, leaving the sheet open so several can be
+     * added in a row. The id is the primary key, so re-adding is a no-op replace.
+     */
+    fun addStaple(suggestion: IngredientAutocomplete) {
+        autocompleteJob?.cancel()
+        _stapleEditor.update {
+            it?.copy(query = "", suggestions = emptyList(), loading = false, error = null)
+        }
+        viewModelScope.launch {
+            dao.insertStaple(StapleIngredient(spoonacularId = suggestion.id, name = suggestion.name))
+        }
+    }
+
+    fun removeStaple(staple: StapleIngredient) {
+        viewModelScope.launch { dao.deleteStaple(staple) }
+    }
+
     // ---- item editor (add / modify) ---------------------------------------
 
     private val _itemEditor = MutableStateFlow<ItemEditorState?>(null)
@@ -219,6 +291,27 @@ class PantryViewModel(
         _itemEditor.value = null
     }
 
+    /**
+     * Debounced ingredient lookup, shared by the item editor and the staples editor:
+     * waits out the keystroke, then reports loading/result/error to whichever state
+     * the caller owns. Only one editor is open at a time, so they share
+     * [autocompleteJob] and each keystroke cancels the other's in-flight request.
+     */
+    private fun searchIngredients(
+        query: String,
+        onLoading: () -> Unit,
+        onResult: (List<IngredientAutocomplete>) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        autocompleteJob = viewModelScope.launch {
+            delay(DEBOUNCE_MS)
+            onLoading()
+            repository.autocompleteIngredients(query.trim())
+                .onSuccess(onResult)
+                .onFailure { e -> onError(friendlyApiError(e)) }
+        }
+    }
+
     /** Debounced autocomplete: re-runs on each keystroke, cancelling the prior delay. */
     fun onQueryChange(query: String) {
         autocompleteJob?.cancel()
@@ -231,13 +324,12 @@ class PantryViewModel(
             else it?.copy(query = query, suggestions = emptyList(), loading = false, error = null)
         }
         if (!searchable) return
-        autocompleteJob = viewModelScope.launch {
-            delay(DEBOUNCE_MS)
-            _itemEditor.update { it?.copy(loading = true, error = null) }
-            repository.autocompleteIngredients(query.trim())
-                .onSuccess { result -> _itemEditor.update { it?.copy(suggestions = result, loading = false) } }
-                .onFailure { e -> _itemEditor.update { it?.copy(error = friendlyApiError(e), loading = false) } }
-        }
+        searchIngredients(
+            query = query,
+            onLoading = { _itemEditor.update { it?.copy(loading = true, error = null) } },
+            onResult = { result -> _itemEditor.update { it?.copy(suggestions = result, loading = false) } },
+            onError = { msg -> _itemEditor.update { it?.copy(error = msg, loading = false) } }
+        )
     }
 
     fun selectSuggestion(suggestion: IngredientAutocomplete) {
