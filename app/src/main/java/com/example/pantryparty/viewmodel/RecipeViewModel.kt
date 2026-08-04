@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
+import com.example.pantryparty.network.SimilarRecipe
 import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.network.SpoonacularRepositoryImpl
 import com.example.pantryparty.network.friendlyApiError
@@ -15,7 +16,10 @@ import com.example.pantryparty.pantry.PantryMath
 import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.recipe.ConsumePlan
 import com.example.pantryparty.recipe.DetailIngredientRow
+import com.example.pantryparty.recipe.IngredientSubstitutions
 import com.example.pantryparty.recipe.PantryConsumer
+import com.example.pantryparty.recipe.SubstituteResult
+import com.example.pantryparty.recipe.normalizeIngredientName
 import com.example.pantryparty.recipe.RecipeDetailRows
 import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.recipe.RecipeMatch
@@ -76,8 +80,44 @@ data class RecipeDetailUi(
     val info: RecipeInformation? = null,
     val rows: List<DetailIngredientRow> = emptyList(),
     val loading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    /**
+     * Substitutes fetched for individual ingredients, keyed by normalized name.
+     * Entries are never removed, so collapsing and reopening a panel doesn't spend
+     * another API point.
+     */
+    val substitutes: Map<String, SubstituteState> = emptyMap(),
+    /**
+     * Which panels are open. Separate from [substitutes] on purpose: expansion is a
+     * UI toggle, and a loaded result has to survive being collapsed.
+     */
+    val expandedSubstitutes: Set<String> = emptySet(),
+    val similar: List<SimilarRecipe> = emptyList(),
+    /**
+     * False when this recipe wasn't in the current search results, so Spoonacular's
+     * `ignorePantry` staple guess is unavailable and every ingredient gets
+     * amount-checked. Happens when a "more like this" suggestion is opened: only the
+     * user's own "always have" list can mark a staple on such a page, so salt and
+     * water get listed as missing where a page reached from the results would have
+     * hidden them. The screen says so rather than pretending otherwise.
+     */
+    val staplesKnown: Boolean = true
 )
+
+/** The minimum a tap needs in order to paint a detail header before the fetch lands. */
+private data class RecipeDetailSeed(val id: Int, val title: String, val image: String?)
+
+/** One ingredient's substitutes panel. */
+sealed interface SubstituteState {
+    data object Loading : SubstituteState
+    data class Loaded(val options: List<String>) : SubstituteState
+
+    /** The API answered and has nothing. Not worth a retry — [Failed] is. */
+    data class Empty(val message: String) : SubstituteState
+
+    /** The call itself failed (network, quota). */
+    data class Failed(val message: String) : SubstituteState
+}
 
 /** Per-recipe state for the on-demand amount check and "I made this" flow. */
 data class RecipeCardState(
@@ -157,6 +197,13 @@ class RecipeViewModel(
 
     private var detailJob: Job? = null
 
+    // Pages reached by tapping a "more like this" suggestion, so back returns to the
+    // recipe you came from. Main-thread only, like detailsById.
+    private val detailBackStack = ArrayDeque<RecipeDetailUi>()
+
+    // Suggestions per recipe id, so reopening a page (or popping back to it) is free.
+    private var similarByRecipe: Map<Int, List<SimilarRecipe>> = emptyMap()
+
     // ---- Filter panel state ----
 
     fun setFilters(filters: RecipeFilters) = _uiState.update { it.copy(filters = filters) }
@@ -207,9 +254,13 @@ class RecipeViewModel(
                 )
             }
             _cardStates.value = emptyMap()
-            // An open detail belongs to results that are about to be replaced.
+            // An open detail belongs to results that are about to be replaced. Clear
+            // the back stack FIRST — closeRecipeDetail pops it, so the other order
+            // would surface a stale page instead of closing.
+            detailBackStack.clear()
             closeRecipeDetail()
             detailsById = emptyMap()
+            similarByRecipe = emptyMap()
             repository.searchRecipes(names, params, RECIPE_COUNT)
                 .onSuccess { result ->
                     // Only ingredient-aware results are bucketed/filtered by missing
@@ -234,19 +285,38 @@ class RecipeViewModel(
      * [checkAmounts] — snapshot the pantry and staples first, so the have/missing
      * split reflects the pantry as it is right now.
      */
-    fun openRecipeDetail(recipe: RecipeByIngredient) {
+    fun openRecipeDetail(recipe: RecipeByIngredient) =
+        openDetail(RecipeDetailSeed(recipe.id, recipe.title, recipe.image), pushCurrent = false)
+
+    /**
+     * Navigates from the open page into one of its "more like this" suggestions.
+     * The current page is pushed so back returns to it rather than out of the page
+     * entirely. [SimilarRecipe.image] is a bare filename; the screen resolves it.
+     */
+    fun openSimilarRecipe(similar: SimilarRecipe) =
+        openDetail(RecipeDetailSeed(similar.id, similar.title, similar.image), pushCurrent = true)
+
+    private fun openDetail(seed: RecipeDetailSeed, pushCurrent: Boolean) {
         detailJob?.cancel()
+        if (pushCurrent) {
+            _detail.value?.let { current ->
+                // Bounded: each entry holds a whole RecipeInformation (now including
+                // nutrition), and nobody drills ten recipes deep then backs out.
+                if (detailBackStack.size >= MAX_DETAIL_DEPTH) detailBackStack.removeFirst()
+                detailBackStack.addLast(current)
+            }
+        }
         _detail.value = RecipeDetailUi(
-            recipeId = recipe.id,
-            title = recipe.title,
-            image = recipe.image,
+            recipeId = seed.id,
+            title = seed.title,
+            image = seed.image,
             loading = true
         )
         detailJob = viewModelScope.launch {
             val pantrySnapshot = stockSnapshot()
-            val nonStaple = nonStapleIds(recipe.id)
+            val nonStaple = nonStapleIds(seed.id)
             val alwaysHave = alwaysHave()
-            recipeDetails(recipe.id)
+            recipeDetails(seed.id)
                 .onSuccess { info ->
                     val rows = info?.let {
                         RecipeDetailRows.build(
@@ -255,13 +325,16 @@ class RecipeViewModel(
                             staples = RecipeMatcher.staplesOf(pantrySnapshot, it, nonStaple, alwaysHave)
                         )
                     }.orEmpty()
-                    updateDetail(recipe.id) {
+                    updateDetail(seed.id) {
                         it.copy(
                             info = info,
                             rows = rows,
                             title = info?.title ?: it.title,
                             image = info?.image ?: it.image,
                             loading = false,
+                            // Null means Spoonacular's staple guess isn't available
+                            // for this recipe — the screen tells the reader so.
+                            staplesKnown = nonStaple != null,
                             // A call that succeeds but returns nothing for this id is
                             // still a failure as far as the reader is concerned.
                             error = if (info == null) "Couldn't load this recipe." else null
@@ -269,14 +342,81 @@ class RecipeViewModel(
                     }
                 }
                 .onFailure { e ->
-                    updateDetail(recipe.id) { it.copy(error = friendlyApiError(e), loading = false) }
+                    updateDetail(seed.id) { it.copy(error = friendlyApiError(e), loading = false) }
                 }
+            loadSimilar(seed.id)
         }
     }
 
+    /**
+     * "More like this". Best-effort and deliberately silent on failure: a
+     * suggestions row that didn't load on a page that otherwise worked doesn't
+     * deserve any pixels. Cached per recipe id so backing out and reopening — or
+     * popping the back stack — costs nothing.
+     */
+    private suspend fun loadSimilar(recipeId: Int) {
+        similarByRecipe[recipeId]?.let { cached ->
+            updateDetail(recipeId) { it.copy(similar = cached) }
+            return
+        }
+        repository.getSimilarRecipes(recipeId, SIMILAR_COUNT)
+            .onSuccess { results ->
+                similarByRecipe = similarByRecipe + (recipeId to results)
+                updateDetail(recipeId) { it.copy(similar = results) }
+            }
+    }
+
+    /** Back: to the recipe you came from if you arrived via "more like this", else out. */
     fun closeRecipeDetail() {
         detailJob?.cancel()
-        _detail.value = null
+        _detail.value = detailBackStack.removeLastOrNull()
+    }
+
+    /**
+     * Opens or closes one ingredient's substitutes panel, fetching the first time it
+     * is opened.
+     *
+     * Costs a point per ingredient, so it is strictly tap-to-load — never prefetched
+     * for every missing row on the page. A result already fetched (or in flight) is
+     * reused, so toggling a panel shut and open again is free; only a previous
+     * [SubstituteState.Failed] is retried.
+     *
+     * Takes no recipeId, unlike [checkAmounts]: the detail page is one-at-a-time
+     * state the ViewModel already owns, and passing an id in from the UI would just
+     * be one more thing that can go stale. Launched on [viewModelScope] rather than
+     * [detailJob] so one slow lookup can't cancel another; [updateDetail]'s id guard
+     * already drops responses that land after the user has moved on.
+     */
+    fun toggleSubstitutes(ingredientName: String) {
+        val key = normalizeIngredientName(ingredientName)
+        if (key.isEmpty()) return
+        val open = _detail.value ?: return
+        val recipeId = open.recipeId
+
+        if (key in open.expandedSubstitutes) {
+            updateDetail(recipeId) { it.copy(expandedSubstitutes = it.expandedSubstitutes - key) }
+            return
+        }
+        updateDetail(recipeId) { it.copy(expandedSubstitutes = it.expandedSubstitutes + key) }
+
+        val existing = open.substitutes[key]
+        val alreadyAnswered = existing != null && existing !is SubstituteState.Failed
+        if (alreadyAnswered) return
+
+        updateDetail(recipeId) { it.copy(substitutes = it.substitutes + (key to SubstituteState.Loading)) }
+        viewModelScope.launch {
+            val state = repository.getIngredientSubstitutes(ingredientName)
+                .fold(
+                    onSuccess = { response ->
+                        when (val result = IngredientSubstitutions.read(response, ingredientName)) {
+                            is SubstituteResult.Found -> SubstituteState.Loaded(result.options)
+                            is SubstituteResult.NotFound -> SubstituteState.Empty(result.message)
+                        }
+                    },
+                    onFailure = { e -> SubstituteState.Failed(friendlyApiError(e)) }
+                )
+            updateDetail(recipeId) { it.copy(substitutes = it.substitutes + (key to state)) }
+        }
     }
 
     /**
@@ -431,6 +571,12 @@ class RecipeViewModel(
     companion object {
         /** How many candidate recipes to request per search. */
         const val RECIPE_COUNT = 10
+
+        /** How many "more like this" suggestions to show under a recipe. */
+        const val SIMILAR_COUNT = 4
+
+        /** Depth cap on the "more like this" back stack; each entry is a full recipe. */
+        const val MAX_DETAIL_DEPTH = 5
 
         /** Factory that injects the dependencies (no DI framework in the project). */
         fun factory(

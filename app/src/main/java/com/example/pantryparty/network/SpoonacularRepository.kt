@@ -19,6 +19,15 @@ interface SpoonacularRepository {
     suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>>
     suspend fun searchRecipes(names: List<String>, filters: Map<String, String>, number: Int): Result<List<RecipeByIngredient>>
     suspend fun getRecipeInformationBulk(ids: List<Int>): Result<List<RecipeInformation>>
+
+    /**
+     * Returns the raw response rather than the substitute list: "none found" is a
+     * successful call carrying the API's own explanatory message, which is the text
+     * worth showing. Unwrapping here would throw it away.
+     */
+    suspend fun getIngredientSubstitutes(name: String): Result<IngredientSubstitutes>
+
+    suspend fun getSimilarRecipes(id: Int, number: Int): Result<List<SimilarRecipe>>
 }
 
 /**
@@ -74,6 +83,12 @@ object SpoonacularRepositoryImpl : SpoonacularRepository {
         runCatchingApi {
             api.getRecipeInformationBulk(ids = ids.joinToString(","), apiKey = apiKey)
         }
+
+    override suspend fun getIngredientSubstitutes(name: String): Result<IngredientSubstitutes> =
+        runCatchingApi { api.getIngredientSubstitutes(ingredientName = name, apiKey = apiKey) }
+
+    override suspend fun getSimilarRecipes(id: Int, number: Int): Result<List<SimilarRecipe>> =
+        runCatchingApi { api.getSimilarRecipes(id = id, number = number, apiKey = apiKey) }
 
     /**
      * Like [runCatching], but rethrows [CancellationException] so a cancelled

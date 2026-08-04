@@ -84,6 +84,8 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
         RecipeDetailScreen(
             detail = openDetail,
             onBack = viewModel::closeRecipeDetail,
+            onToggleSubstitutes = viewModel::toggleSubstitutes,
+            onOpenSimilar = viewModel::openSimilarRecipe,
             modifier = modifier
         )
         return

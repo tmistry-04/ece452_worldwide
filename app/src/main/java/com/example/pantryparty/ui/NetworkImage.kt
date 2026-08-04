@@ -12,19 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.SubcomposeAsyncImage
 
-/** Base path for Spoonacular's 100x100 ingredient thumbnails. */
-private const val INGREDIENT_IMAGE_BASE = "https://img.spoonacular.com/ingredients_100x100/"
-
-/**
- * Builds a full ingredient image URL from a stored Spoonacular filename
- * (e.g. "apple.jpg"). Already-absolute URLs are returned unchanged; blank/null
- * yields null so the caller can show a placeholder.
- */
-fun ingredientImageUrl(fileOrUrl: String?): String? = when {
-    fileOrUrl.isNullOrBlank() -> null
-    fileOrUrl.startsWith("http") -> fileOrUrl
-    else -> INGREDIENT_IMAGE_BASE + fileOrUrl
-}
+// ingredientImageUrl/recipeImageUrl moved to ImageUrls.kt (same package) so they
+// can be unit-tested without loading this file's Compose and Coil dependencies.
 
 /**
  * Coil-backed image with a crossfade, a spinner while loading, and a friendly

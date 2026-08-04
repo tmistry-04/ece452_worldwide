@@ -1,8 +1,10 @@
 package com.example.pantryparty.fakes
 
 import com.example.pantryparty.network.IngredientAutocomplete
+import com.example.pantryparty.network.IngredientSubstitutes
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
+import com.example.pantryparty.network.SimilarRecipe
 import com.example.pantryparty.network.SpoonacularRepository
 import kotlinx.coroutines.awaitCancellation
 
@@ -26,16 +28,24 @@ class FakeSpoonacularRepository : SpoonacularRepository {
     var autocompleteHandler: ((String) -> Result<List<IngredientAutocomplete>>)? = null
     var recipesResult: Result<List<RecipeByIngredient>> = Result.success(emptyList())
     var detailsResult: Result<List<RecipeInformation>> = Result.success(emptyList())
+    var substitutesResult: Result<IngredientSubstitutes> = Result.success(IngredientSubstitutes())
+    var similarResult: Result<List<SimilarRecipe>> = Result.success(emptyList())
 
     var hangAutocomplete = false
     var hangRecipes = false
     var hangDetails = false
+    var hangSubstitutes = false
+    var hangSimilar = false
 
     var autocompleteCalls = 0
         private set
     var recipesCalls = 0
         private set
     var detailsCalls = 0
+        private set
+    var substitutesCalls = 0
+        private set
+    var similarCalls = 0
         private set
 
     var lastAutocompleteQuery: String? = null
@@ -48,6 +58,10 @@ class FakeSpoonacularRepository : SpoonacularRepository {
     var lastRecipeFilters: Map<String, String>? = null
         private set
     var lastDetailsIds: List<Int>? = null
+        private set
+    var lastSubstitutesName: String? = null
+        private set
+    var lastSimilarId: Int? = null
         private set
 
     override suspend fun autocompleteIngredients(query: String): Result<List<IngredientAutocomplete>> {
@@ -75,5 +89,19 @@ class FakeSpoonacularRepository : SpoonacularRepository {
         lastDetailsIds = ids
         if (hangDetails) awaitCancellation()
         return detailsResult
+    }
+
+    override suspend fun getIngredientSubstitutes(name: String): Result<IngredientSubstitutes> {
+        substitutesCalls++
+        lastSubstitutesName = name
+        if (hangSubstitutes) awaitCancellation()
+        return substitutesResult
+    }
+
+    override suspend fun getSimilarRecipes(id: Int, number: Int): Result<List<SimilarRecipe>> {
+        similarCalls++
+        lastSimilarId = id
+        if (hangSimilar) awaitCancellation()
+        return similarResult
     }
 }

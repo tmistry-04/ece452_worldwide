@@ -144,6 +144,33 @@ class SpoonacularModelsTest {
     }
 
     @Test
+    fun recipeInformation_nutritionParses_andIsNullWhenNotRequested() {
+        val withNutrition = SpoonacularJson.decodeFromString<RecipeInformation>(
+            """
+            {
+              "id": 1, "title": "Casserole",
+              "nutrition": {
+                "nutrients": [
+                  {"name": "Calories", "amount": 324.76, "unit": "kcal", "percentOfDailyNeeds": 16.24},
+                  {"name": "Saturated Fat", "amount": 5.38, "unit": "g", "percentOfDailyNeeds": 33.64}
+                ],
+                "caloricBreakdown": {"percentProtein": 33.08, "percentFat": 33.72, "percentCarbs": 33.2}
+              }
+            }
+            """
+        )
+        val nutrients = withNutrition.nutrition!!.nutrients
+        assertEquals(2, nutrients.size)
+        assertEquals("Calories", nutrients[0].name)
+        assertEquals(324.76, nutrients[0].amount, 0.001)
+        assertEquals("kcal", nutrients[0].unit)
+
+        // includeNutrition=false (or an endpoint that never returns it) leaves it null.
+        val without = SpoonacularJson.decodeFromString<RecipeInformation>("""{"id": 1, "title": "x"}""")
+        assertNull(without.nutrition)
+    }
+
+    @Test
     fun analyzedInstructions_unknownStepFields_areIgnored() {
         val info = SpoonacularJson.decodeFromString<RecipeInformation>(
             """

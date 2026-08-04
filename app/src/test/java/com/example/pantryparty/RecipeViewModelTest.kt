@@ -5,12 +5,15 @@ import com.example.pantryparty.data.PantryTransaction
 import com.example.pantryparty.fakes.FakePantryDao
 import com.example.pantryparty.fakes.FakeSpoonacularRepository
 import com.example.pantryparty.network.ExtendedIngredient
+import com.example.pantryparty.network.IngredientSubstitutes
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.RecipeIngredientBrief
+import com.example.pantryparty.network.SimilarRecipe
 import com.example.pantryparty.recipe.IngredientStatus
 import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.viewmodel.RecipeViewModel
+import com.example.pantryparty.viewmodel.SubstituteState
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -430,6 +433,241 @@ class RecipeViewModelTest {
         val rows = vm.detail.value!!.rows
         assertEquals(2, rows.size)
         assertTrue(rows.none { it.status == IngredientStatus.STAPLE })
+    }
+
+    // --- "more like this" and the detail back stack ---------------------------
+
+    private fun similar(id: Int) = SimilarRecipe(id = id, title = "S$id", image = "S$id.jpg")
+
+    @Test
+    fun openingARecipe_loadsItsSuggestions() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        repo.similarResult = Result.success(listOf(similar(20), similar(21)))
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        assertEquals(listOf(20, 21), vm.detail.value!!.similar.map { it.id })
+    }
+
+    @Test
+    fun openingASuggestion_pushesTheBackStack_andCloseReturnsToIt() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        repo.similarResult = Result.success(listOf(similar(20)))
+        val vm = startViewModel()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        repo.detailsResult = Result.success(listOf(omelette(id = 20).copy(title = "Second")))
+        vm.openSimilarRecipe(similar(20))
+        advanceUntilIdle()
+        assertEquals(20, vm.detail.value!!.recipeId)
+
+        // Back goes to the recipe you came from, not out of the page.
+        vm.closeRecipeDetail()
+        assertEquals(10, vm.detail.value!!.recipeId)
+
+        // And once more backs out entirely.
+        vm.closeRecipeDetail()
+        assertNull(vm.detail.value)
+    }
+
+    @Test
+    fun aRecipeNotInTheResults_reportsThatStaplesAreUnknown() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+        vm.search()
+        advanceUntilIdle()
+
+        // In the results: Spoonacular's staple guess is available.
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        assertTrue(vm.detail.value!!.staplesKnown)
+
+        // A suggestion is not in the results, so it isn't.
+        repo.detailsResult = Result.success(listOf(omelette(id = 20)))
+        vm.openSimilarRecipe(similar(20))
+        advanceUntilIdle()
+        assertFalse(vm.detail.value!!.staplesKnown)
+    }
+
+    @Test
+    fun aNewSearch_clearsTheBackStack() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        vm.openSimilarRecipe(similar(20))
+        advanceUntilIdle()
+
+        vm.search()
+        advanceUntilIdle()
+
+        // Both pages belonged to results that no longer exist — close must not pop
+        // one of them back into view.
+        assertNull(vm.detail.value)
+    }
+
+    @Test
+    fun reopeningARecipe_servesSuggestionsFromCache() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        repo.similarResult = Result.success(listOf(similar(20)))
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        assertEquals(1, repo.similarCalls)
+
+        vm.closeRecipeDetail()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        assertEquals(1, repo.similarCalls)
+        assertEquals(listOf(20), vm.detail.value!!.similar.map { it.id })
+    }
+
+    @Test
+    fun aSuggestionsFailure_leavesThePageUsable() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        repo.similarResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertTrue(detail.similar.isEmpty())   // the row simply doesn't appear
+        assertNull(detail.error)
+        assertEquals("Omelette", detail.info?.title)
+    }
+
+    // --- ingredient substitutes ----------------------------------------------
+
+    /** Opens the detail page for the omelette, whose butter is missing. */
+    private suspend fun TestScope.detailWithMissingButter(): RecipeViewModel {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        return vm
+    }
+
+    @Test
+    fun toggleSubstitutes_loadsAndExpandsThePanel() = runTest {
+        repo.substitutesResult = Result.success(
+            IngredientSubstitutes(
+                status = "success",
+                ingredient = "butter",
+                substitutes = listOf("1 cup = 1 cup margarine")
+            )
+        )
+        val vm = detailWithMissingButter()
+
+        vm.toggleSubstitutes("butter")
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertTrue("butter" in detail.expandedSubstitutes)
+        assertEquals(
+            listOf("1 cup = 1 cup margarine"),
+            (detail.substitutes["butter"] as SubstituteState.Loaded).options
+        )
+        assertEquals("butter", repo.lastSubstitutesName)
+    }
+
+    @Test
+    fun statusFailure_isEmptyNotFailed() = runTest {
+        // HTTP 200 with status:"failure" — a miss, not an error worth retrying.
+        repo.substitutesResult = Result.success(
+            IngredientSubstitutes(status = "failure", message = "Could not find any substitutes.")
+        )
+        val vm = detailWithMissingButter()
+
+        vm.toggleSubstitutes("butter")
+        advanceUntilIdle()
+
+        val state = vm.detail.value!!.substitutes["butter"]
+        assertTrue(state is SubstituteState.Empty)
+        assertEquals("Could not find any substitutes.", (state as SubstituteState.Empty).message)
+    }
+
+    @Test
+    fun collapsingAndReopeningAPanel_doesNotRefetch() = runTest {
+        repo.substitutesResult = Result.success(
+            IngredientSubstitutes(status = "success", substitutes = listOf("margarine"))
+        )
+        val vm = detailWithMissingButter()
+
+        vm.toggleSubstitutes("butter")
+        advanceUntilIdle()
+        assertEquals(1, repo.substitutesCalls)
+
+        vm.toggleSubstitutes("butter")   // collapse
+        vm.toggleSubstitutes("butter")   // reopen
+        advanceUntilIdle()
+
+        assertEquals(1, repo.substitutesCalls)
+        // The loaded result survived the collapse.
+        assertTrue(vm.detail.value!!.substitutes["butter"] is SubstituteState.Loaded)
+    }
+
+    @Test
+    fun aFailedLookup_isRetriedOnReopen() = runTest {
+        repo.substitutesResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = detailWithMissingButter()
+
+        vm.toggleSubstitutes("butter")
+        advanceUntilIdle()
+        val failed = vm.detail.value!!.substitutes["butter"]
+        assertTrue(failed is SubstituteState.Failed)
+        assertTrue((failed as SubstituteState.Failed).message.contains("quota"))
+
+        repo.substitutesResult = Result.success(
+            IngredientSubstitutes(status = "success", substitutes = listOf("margarine"))
+        )
+        vm.toggleSubstitutes("butter")   // collapse
+        vm.toggleSubstitutes("butter")   // reopen -> retried, unlike a success
+        advanceUntilIdle()
+
+        assertEquals(2, repo.substitutesCalls)
+        assertTrue(vm.detail.value!!.substitutes["butter"] is SubstituteState.Loaded)
+    }
+
+    @Test
+    fun aSubstituteFailure_leavesTheRestOfThePageAlone() = runTest {
+        repo.substitutesResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = detailWithMissingButter()
+
+        vm.toggleSubstitutes("butter")
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertNull(detail.error)                       // the page itself is fine
+        assertEquals(2, detail.rows.size)
+        assertEquals("Omelette", detail.info?.title)
+    }
+
+    @Test
+    fun substitutesAreNotFetchedUntilTapped() = runTest {
+        val vm = detailWithMissingButter()
+        // A page with missing ingredients must not spend a point per row on open.
+        assertEquals(0, repo.substitutesCalls)
+        assertTrue(vm.detail.value!!.substitutes.isEmpty())
     }
 
     // --- "I made this" deduction --------------------------------------------

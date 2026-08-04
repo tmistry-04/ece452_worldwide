@@ -32,7 +32,7 @@ class RecipeInstructionsTest {
             info(analyzed = listOf(group("", "Peel it.")), instructions = "<p>Ignore me.</p>")
         )
         val structured = steps as RecipeSteps.Structured
-        assertEquals("Peel it.", structured.groups.single().steps.single().step)
+        assertEquals("Peel it.", structured.groups.single().steps.single().text)
     }
 
     @Test
@@ -80,6 +80,31 @@ class RecipeInstructionsTest {
         assertEquals(listOf("Dough", "Filling"), groups.map { it.name })
         assertEquals(listOf(1, 2), groups[0].steps.map { it.number })
         assertEquals(listOf(1), groups[1].steps.map { it.number })
+    }
+
+    /**
+     * End-to-end for the reported bug: recipe 715394's analyzed step 1 is truncated,
+     * and its own `instructions` field holds the number the parser dropped.
+     */
+    @Test
+    fun truncatedStepNumbers_areRepairedFromThePlainInstructions() {
+        val steps = RecipeInstructions.of(
+            info(
+                analyzed = listOf(group("", "Heat oven to 37", "Prepare a 9 x 13 baking dish.")),
+                instructions = "<p>Heat oven to 375. Prepare a 9 x 13 baking dish.</p>"
+            )
+        )
+        val texts = (steps as RecipeSteps.Structured).groups.single().steps.map { it.text }
+        assertEquals(listOf("Heat oven to 375", "Prepare a 9 x 13 baking dish."), texts)
+    }
+
+    @Test
+    fun stepTextIsHtmlStrippedBeforeItReachesTheScreen() {
+        val steps = RecipeInstructions.of(info(analyzed = listOf(group("", "<b>Mash</b> the &amp; bananas."))))
+        assertEquals(
+            "Mash the & bananas.",
+            (steps as RecipeSteps.Structured).groups.single().steps.single().text
+        )
     }
 
     @Test

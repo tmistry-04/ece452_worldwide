@@ -74,11 +74,17 @@ object RecipeBadges {
             .replace(Regex("[^a-z0-9]+"), " ")
             .trim()
             .takeIf { it.isNotEmpty() }
-
-    /** "main course" -> "Main Course"; leaves existing capitals alone ("FODMAP"). */
-    private fun titleCaseWords(raw: String): String? =
-        raw.trim()
-            .takeIf { it.isNotEmpty() }
-            ?.split(" ")
-            ?.joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
 }
+
+/**
+ * "main course" -> "Main Course"; leaves existing capitals alone ("FODMAP").
+ *
+ * Top-level rather than private to [RecipeBadges] because RecipeEquipment wants
+ * exactly this behaviour, and two title-casers that drift apart would show the same
+ * word differently in two places on one screen.
+ */
+internal fun titleCaseWords(raw: String): String? =
+    raw.trim()
+        .takeIf { it.isNotEmpty() }
+        ?.split(" ")
+        ?.joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
