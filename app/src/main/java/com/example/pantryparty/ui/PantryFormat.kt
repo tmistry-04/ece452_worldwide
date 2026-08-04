@@ -19,3 +19,9 @@ fun formatDay(epochDay: Long): String = formatDate(LocalDate.ofEpochDay(epochDay
 
 /** "apple" -> "Apple"; ingredient names come lowercase from Spoonacular. */
 fun titleCase(name: String): String = name.replaceFirstChar { it.uppercase() }
+
+/** "2.0 cup flour" -> "2 cup flour"; drops trailing .0 for readability. */
+fun formatAmount(amount: Double, unit: String, name: String): String {
+    val amountText = if (amount % 1.0 == 0.0) amount.toInt().toString() else amount.toString()
+    return listOf(amountText, unit, name).filter { it.isNotBlank() }.joinToString(" ")
+}
