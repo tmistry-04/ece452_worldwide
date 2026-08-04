@@ -1,5 +1,6 @@
 package com.example.pantryparty.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -61,17 +62,38 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
     val pantry by viewModel.pantry.collectAsStateWithLifecycle()
     val ui by viewModel.uiState.collectAsStateWithLifecycle()
     val cardStates by viewModel.cardStates.collectAsStateWithLifecycle()
+    val detail by viewModel.detail.collectAsStateWithLifecycle()
 
     // The first search auto-runs once the pantry has anything in it.
     LaunchedEffect(pantry.isNotEmpty()) {
         viewModel.autoSearchIfNeeded()
     }
 
+    // Hoisted above the branch below so the results keep their scroll offset while
+    // the detail page is open — back returns you to the card you tapped.
+    val resultsScroll = rememberScrollState()
+
+    // System back closes the detail rather than leaving the app.
+    BackHandler(enabled = detail != null) { viewModel.closeRecipeDetail() }
+
+    // Bound to a local first: `detail` is a delegated State, which can't smart-cast.
+    val openDetail = detail
+    if (openDetail != null) {
+        // Replaces the results rather than nesting inside them — the detail page
+        // scrolls itself, and Compose throws if two vertical scrolls nest.
+        RecipeDetailScreen(
+            detail = openDetail,
+            onBack = viewModel::closeRecipeDetail,
+            modifier = modifier
+        )
+        return
+    }
+
     // Owns its own vertical scroll (MainScaffold no longer provides one).
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(resultsScroll)
             .padding(16.dp)
     ) {
         Text(
@@ -104,6 +126,16 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
             Text(it, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(8.dp))
         }
+        // The search worked; only the follow-up details fetch didn't. Sits above
+        // the results as a note rather than replacing them.
+        ui.staplesError?.let {
+            Text(
+                "Couldn't load full recipe details: $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+        }
 
         if (!ui.loading && ui.hasSearched && ui.error == null) {
             RecipeResults(
@@ -115,7 +147,8 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
                 onPrepareConsume = viewModel::prepareConsume,
                 onAdjustConsume = viewModel::adjustConsume,
                 onConfirmConsume = viewModel::confirmConsume,
-                onDismissConsume = viewModel::dismissConsume
+                onDismissConsume = viewModel::dismissConsume,
+                onOpenDetail = viewModel::openRecipeDetail
             )
         }
     }
@@ -131,7 +164,8 @@ private fun RecipeResults(
     onPrepareConsume: (Int) -> Unit,
     onAdjustConsume: (recipeId: Int, lineIndex: Int, delta: Int) -> Unit,
     onConfirmConsume: (Int) -> Unit,
-    onDismissConsume: (Int) -> Unit
+    onDismissConsume: (Int) -> Unit,
+    onOpenDetail: (RecipeByIngredient) -> Unit
 ) {
     if (recipes.isEmpty()) {
         // Polished empty-results state.
@@ -168,7 +202,8 @@ private fun RecipeResults(
         onPrepareConsume = { onPrepareConsume(recipe.id) },
         onAdjustConsume = { lineIndex, delta -> onAdjustConsume(recipe.id, lineIndex, delta) },
         onConfirmConsume = { onConfirmConsume(recipe.id) },
-        onDismissConsume = { onDismissConsume(recipe.id) }
+        onDismissConsume = { onDismissConsume(recipe.id) },
+        onOpen = { onOpenDetail(recipe) }
     )
 
     // Filter-only search: no ingredient context, so no have/missing framing at all.
@@ -221,11 +256,14 @@ private fun RecipeCard(
     onPrepareConsume: () -> Unit,
     onAdjustConsume: (lineIndex: Int, delta: Int) -> Unit,
     onConfirmConsume: () -> Unit,
-    onDismissConsume: () -> Unit
+    onDismissConsume: () -> Unit,
+    onOpen: () -> Unit
 ) {
     val isReady = recipe.missedIngredients.isEmpty()
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    // Tapping the card opens the full recipe. The action buttons below are their
+    // own clickables, so they consume their taps before this one sees them.
+    Card(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
         Column {
             // Hero image (full width). Spoonacular returns an absolute URL here.
             NetworkImage(
@@ -337,7 +375,7 @@ private fun RecipeCard(
 
 /** Small rounded pill for an ingredient name — green if owned, neutral if needed. */
 @Composable
-private fun IngredientPill(name: String, owned: Boolean) {
+internal fun IngredientPill(name: String, owned: Boolean) {
     Surface(
         shape = RoundedCornerShape(50),
         color = if (owned)
@@ -454,7 +492,9 @@ private fun AmountDetail(match: RecipeMatch) {
             Icon(
                 Icons.Filled.CheckCircle,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                // secondary, not primary: primary is Tomato *red*, which reads as an
+                // error next to a success message. Green is the secondary role.
+                tint = MaterialTheme.colorScheme.secondary,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.size(6.dp))
@@ -510,10 +550,4 @@ private fun StaplesSection(names: List<String>) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         names.forEach { IngredientPill(it, owned = true) }
     }
-}
-
-/** "2.0 cup flour" -> "2 cup flour"; drops trailing .0 for readability. */
-private fun formatAmount(amount: Double, unit: String, name: String): String {
-    val amountText = if (amount % 1.0 == 0.0) amount.toInt().toString() else amount.toString()
-    return listOf(amountText, unit, name).filter { it.isNotBlank() }.joinToString(" ")
 }

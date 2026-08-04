@@ -8,6 +8,7 @@ import com.example.pantryparty.network.ExtendedIngredient
 import com.example.pantryparty.network.RecipeByIngredient
 import com.example.pantryparty.network.RecipeInformation
 import com.example.pantryparty.network.RecipeIngredientBrief
+import com.example.pantryparty.recipe.IngredientStatus
 import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.viewmodel.RecipeViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -18,6 +19,7 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -209,6 +211,225 @@ class RecipeViewModelTest {
         vm.prepareConsume(10)
         advanceUntilIdle()
         assertEquals(1, repo.detailsCalls)   // second check served from the cache
+    }
+
+    // --- the follow-up staples fetch ----------------------------------------
+
+    @Test
+    fun staplesFetchFailure_isReported_butTheRecipesStayOnScreen() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+
+        vm.search()
+        advanceUntilIdle()
+
+        val ui = vm.uiState.value
+        assertTrue(ui.staplesError!!.contains("quota"))
+        // `error` blanks the results list, so the partial failure must not set it.
+        assertNull(ui.error)
+        assertEquals(1, ui.recipes.size)
+    }
+
+    @Test
+    fun aSucceedingSearch_clearsAnEarlierStaplesError() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+        vm.search()
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.staplesError)
+
+        repo.detailsResult = Result.success(listOf(omelette()))
+        vm.search()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.staplesError)
+    }
+
+    @Test
+    fun aCancelledSearch_doesNotReportAStaplesError() = runTest {
+        // The repository rethrows CancellationException rather than folding it into
+        // a failed Result, so replacing an in-flight search must stay silent.
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.hangDetails = true
+        val vm = startViewModel()
+        vm.search()
+        advanceUntilIdle()
+
+        repo.hangDetails = false
+        repo.detailsResult = Result.success(listOf(omelette()))
+        vm.search()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.staplesError)
+    }
+
+    // --- the recipe detail page ---------------------------------------------
+
+    /** An omelette needing 2 eggs and 3 tbsp butter. */
+    private fun omelette(id: Int = 10) = RecipeInformation(
+        id = id, title = "Omelette", readyInMinutes = 15, servings = 2,
+        glutenFree = true,
+        instructions = "<p>Beat the eggs.</p>",
+        extendedIngredients = listOf(
+            ExtendedIngredient(id = 1, name = "egg", amount = 2.0, unit = "piece"),
+            ExtendedIngredient(id = 2, name = "butter", amount = 3.0, unit = "tbsp")
+        )
+    )
+
+    @Test
+    fun openRecipeDetail_populatesInfoAndClassifiedRows() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)   // enough
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertEquals(10, detail.recipeId)
+        assertEquals("Omelette", detail.title)
+        assertEquals(15, detail.info?.readyInMinutes)
+        assertFalse(detail.loading)
+        assertNull(detail.error)
+
+        // Rows follow the recipe's own ingredient order, not the matcher's buckets.
+        assertEquals(listOf("egg", "butter"), detail.rows.map { it.required.name })
+        assertEquals(IngredientStatus.HAVE, detail.rows[0].status)
+        assertEquals(IngredientStatus.MISSING, detail.rows[1].status)
+    }
+
+    /**
+     * The whole cost argument for the detail page: the search already paid for the
+     * bulk details fetch, so opening a recipe must not hit the API again.
+     */
+    @Test
+    fun openRecipeDetail_reusesTheSearchCache_withoutAnotherApiCall() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+
+        vm.search()
+        advanceUntilIdle()
+        assertEquals(1, repo.detailsCalls)   // the search's own staples fetch
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        assertEquals(1, repo.detailsCalls)   // served from the cache
+        assertEquals("Omelette", vm.detail.value?.info?.title)
+    }
+
+    @Test
+    fun openRecipeDetail_showsTheTappedRowsTitleWhileLoading() = runTest {
+        repo.hangDetails = true
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertTrue(detail.loading)
+        assertEquals("R10", detail.title)    // seeded from the search row, not blank
+        assertNull(detail.info)
+    }
+
+    @Test
+    fun openRecipeDetail_quotaFailure_showsTheFriendlyMessage() = runTest {
+        repo.detailsResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertTrue(detail.error!!.contains("quota"))
+        assertFalse(detail.loading)
+        assertEquals("R10", detail.title)    // still renders what was tapped
+    }
+
+    @Test
+    fun openRecipeDetail_whenTheApiHasNothingForThatId_isAnError() = runTest {
+        repo.detailsResult = Result.success(emptyList())
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        assertNotNull(vm.detail.value!!.error)
+        assertFalse(vm.detail.value!!.loading)
+    }
+
+    @Test
+    fun closeRecipeDetail_clearsTheState() = runTest {
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        vm.closeRecipeDetail()
+
+        assertNull(vm.detail.value)
+    }
+
+    @Test
+    fun openingASecondRecipe_cancelsTheFirstsInFlightLoad() = runTest {
+        repo.hangDetails = true
+        val vm = startViewModel()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        repo.hangDetails = false
+        repo.detailsResult = Result.success(listOf(omelette(id = 20).copy(title = "Second")))
+        vm.openRecipeDetail(searchResult(20, missed = 0))
+        advanceUntilIdle()
+
+        val detail = vm.detail.value!!
+        assertEquals(20, detail.recipeId)
+        assertEquals("Second", detail.title)
+        assertFalse(detail.loading)
+    }
+
+    @Test
+    fun aNewSearch_closesTheOpenDetail() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+        assertNotNull(vm.detail.value)
+
+        vm.search()
+        advanceUntilIdle()
+
+        // The open page belonged to results that have just been replaced.
+        assertNull(vm.detail.value)
+    }
+
+    @Test
+    fun openRecipeDetail_forARecipeNotInTheResults_checksEveryIngredient() = runTest {
+        // No search has run, so nonStapleIds() returns null and nothing can be
+        // assumed to be a staple — every ingredient gets amount-checked.
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.detailsResult = Result.success(listOf(omelette()))
+        val vm = startViewModel()
+
+        vm.openRecipeDetail(searchResult(10, missed = 0))
+        advanceUntilIdle()
+
+        val rows = vm.detail.value!!.rows
+        assertEquals(2, rows.size)
+        assertTrue(rows.none { it.status == IngredientStatus.STAPLE })
     }
 
     // --- "I made this" deduction --------------------------------------------

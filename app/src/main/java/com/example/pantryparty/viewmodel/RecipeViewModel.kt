@@ -14,7 +14,9 @@ import com.example.pantryparty.network.friendlyApiError
 import com.example.pantryparty.pantry.PantryMath
 import com.example.pantryparty.pantry.StockItem
 import com.example.pantryparty.recipe.ConsumePlan
+import com.example.pantryparty.recipe.DetailIngredientRow
 import com.example.pantryparty.recipe.PantryConsumer
+import com.example.pantryparty.recipe.RecipeDetailRows
 import com.example.pantryparty.recipe.RecipeFilters
 import com.example.pantryparty.recipe.RecipeMatch
 import com.example.pantryparty.recipe.RecipeMatcher
@@ -49,7 +51,32 @@ data class RecipeUiState(
     val ingredientSearch: Boolean = true,
     val loading: Boolean = false,
     val error: String? = null,
+    /**
+     * The follow-up details fetch failed, so staple lists are missing.
+     *
+     * Kept separate from [error] on purpose: the search itself succeeded and the
+     * recipes are worth showing. [error] blanks the whole results list, which
+     * would turn a partial degradation into a total one.
+     */
+    val staplesError: String? = null,
     val hasSearched: Boolean = false,
+)
+
+/**
+ * The open recipe detail page, or null when closed.
+ *
+ * [title] and [image] are seeded from the tapped search row so the header paints
+ * immediately; the fetched [info] overwrites them. That also means an error page
+ * still shows the recipe you tapped rather than going blank.
+ */
+data class RecipeDetailUi(
+    val recipeId: Int,
+    val title: String,
+    val image: String?,
+    val info: RecipeInformation? = null,
+    val rows: List<DetailIngredientRow> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null
 )
 
 /** Per-recipe state for the on-demand amount check and "I made this" flow. */
@@ -121,6 +148,15 @@ class RecipeViewModel(
     // new search starts, so stale responses can't land.
     private var searchJob: Job? = null
 
+    // The open recipe detail page, or null when closed. Deliberately its own flow
+    // rather than fields on RecipeCardState: detail is one-at-a-time, screen-scoped
+    // state, and folding it into the per-card map would recompose every result card
+    // on each loading tick. Mirrors PantryViewModel's `detail` flow.
+    private val _detail = MutableStateFlow<RecipeDetailUi?>(null)
+    val detail: StateFlow<RecipeDetailUi?> = _detail.asStateFlow()
+
+    private var detailJob: Job? = null
+
     // ---- Filter panel state ----
 
     fun setFilters(filters: RecipeFilters) = _uiState.update { it.copy(filters = filters) }
@@ -164,8 +200,15 @@ class RecipeViewModel(
         }
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, error = null, hasSearched = true, staplesByRecipe = emptyMap()) }
+            _uiState.update {
+                it.copy(
+                    loading = true, error = null, staplesError = null,
+                    hasSearched = true, staplesByRecipe = emptyMap()
+                )
+            }
             _cardStates.value = emptyMap()
+            // An open detail belongs to results that are about to be replaced.
+            closeRecipeDetail()
             detailsById = emptyMap()
             repository.searchRecipes(names, params, RECIPE_COUNT)
                 .onSuccess { result ->
@@ -181,6 +224,70 @@ class RecipeViewModel(
         }
     }
 
+    // ---- Recipe detail page ----
+
+    /**
+     * Opens the full detail page for a tapped search result.
+     *
+     * Usually free: [recipeDetails] serves out of the cache the search's bulk
+     * fetch already populated, so no request is made. Same loader shape as
+     * [checkAmounts] — snapshot the pantry and staples first, so the have/missing
+     * split reflects the pantry as it is right now.
+     */
+    fun openRecipeDetail(recipe: RecipeByIngredient) {
+        detailJob?.cancel()
+        _detail.value = RecipeDetailUi(
+            recipeId = recipe.id,
+            title = recipe.title,
+            image = recipe.image,
+            loading = true
+        )
+        detailJob = viewModelScope.launch {
+            val pantrySnapshot = stockSnapshot()
+            val nonStaple = nonStapleIds(recipe.id)
+            val alwaysHave = alwaysHave()
+            recipeDetails(recipe.id)
+                .onSuccess { info ->
+                    val rows = info?.let {
+                        RecipeDetailRows.build(
+                            info = it,
+                            match = RecipeMatcher.match(pantrySnapshot, it, nonStaple, alwaysHave),
+                            staples = RecipeMatcher.staplesOf(pantrySnapshot, it, nonStaple, alwaysHave)
+                        )
+                    }.orEmpty()
+                    updateDetail(recipe.id) {
+                        it.copy(
+                            info = info,
+                            rows = rows,
+                            title = info?.title ?: it.title,
+                            image = info?.image ?: it.image,
+                            loading = false,
+                            // A call that succeeds but returns nothing for this id is
+                            // still a failure as far as the reader is concerned.
+                            error = if (info == null) "Couldn't load this recipe." else null
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    updateDetail(recipe.id) { it.copy(error = friendlyApiError(e), loading = false) }
+                }
+        }
+    }
+
+    fun closeRecipeDetail() {
+        detailJob?.cancel()
+        _detail.value = null
+    }
+
+    /**
+     * Applies [transform] only while [recipeId] is still the open recipe, so a
+     * response that lands after the user backed out — or opened something else —
+     * can't overwrite the current page.
+     */
+    private fun updateDetail(recipeId: Int, transform: (RecipeDetailUi) -> RecipeDetailUi) {
+        _detail.update { current -> if (current?.recipeId == recipeId) transform(current) else current }
+    }
+
     /** The ingredient names the next search will pass as includeIngredients. */
     private fun selectedIngredientNames(): List<String> {
         val stock = pantry.value
@@ -192,8 +299,13 @@ class RecipeViewModel(
      * Fetches full details for the shown recipes once, caches them, and computes
      * each recipe's staple list (ingredients the search ignored). Runs inside the
      * search job so it is cancelled along with the search it belongs to.
-     * Best-effort: if this call fails (e.g. quota), the results still show, just
-     * without staples.
+     *
+     * Best-effort: the recipes are already on screen and stay there if this fails.
+     * The failure is reported through [RecipeUiState.staplesError] rather than
+     * `error` — the latter blanks the results list — so the user learns why the
+     * staple lists are missing instead of finding out by tapping into a card.
+     * Cancellation never lands here: the repository rethrows it rather than
+     * folding it into a failed Result.
      */
     private suspend fun loadStaples(recipes: List<RecipeByIngredient>) {
         if (recipes.isEmpty()) return
@@ -212,7 +324,10 @@ class RecipeViewModel(
                             .map { ing -> ing.name }
                     } ?: emptyList())
                 }
-                _uiState.update { it.copy(staplesByRecipe = staples) }
+                _uiState.update { it.copy(staplesByRecipe = staples, staplesError = null) }
+            }
+            .onFailure { e ->
+                _uiState.update { it.copy(staplesError = friendlyApiError(e)) }
             }
     }
 

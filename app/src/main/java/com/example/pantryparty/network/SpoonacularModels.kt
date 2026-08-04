@@ -54,7 +54,14 @@ data class RecipeIngredientBrief(
     val image: String? = null
 )
 
-/** Full recipe details from informationBulk — carries required amounts. */
+/**
+ * Full recipe details from informationBulk — carries required amounts.
+ *
+ * The fields below `extendedIngredients` feed the recipe detail page. They were
+ * always in the response (informationBulk returns the same object the single
+ * `recipes/{id}/information` endpoint does); SpoonacularJson's `ignoreUnknownKeys`
+ * was simply dropping them. Declaring them costs no extra request.
+ */
 @Serializable
 data class RecipeInformation(
     val id: Int,
@@ -62,7 +69,62 @@ data class RecipeInformation(
     val image: String? = null,
     val readyInMinutes: Int? = null,
     val servings: Int? = null,
-    val extendedIngredients: List<ExtendedIngredient> = emptyList()
+    val extendedIngredients: List<ExtendedIngredient> = emptyList(),
+    // --- detail page ---
+    val sourceUrl: String? = null,
+    val sourceName: String? = null,
+    val summary: String? = null,                 // HTML
+    val instructions: String? = null,            // HTML; the fallback when analyzedInstructions is stepless
+    val analyzedInstructions: List<AnalyzedInstruction> = emptyList(),
+    val vegetarian: Boolean = false,
+    val vegan: Boolean = false,
+    val glutenFree: Boolean = false,
+    val dairyFree: Boolean = false,
+    val ketogenic: Boolean = false,
+    val lowFodmap: Boolean = false,
+    val whole30: Boolean = false,
+    val dishTypes: List<String> = emptyList(),
+    val cuisines: List<String> = emptyList(),
+    val diets: List<String> = emptyList()
+)
+
+/**
+ * One group of steps. Most recipes return a single unnamed group; recipes built
+ * in parts return several ("Dough", "Filling"), each numbering from 1.
+ *
+ * Note a very common response shape is a *non-empty* list holding a group with
+ * *zero* steps — see RecipeInstructions, which branches on the flattened step
+ * count rather than on this list being empty.
+ */
+@Serializable
+data class AnalyzedInstruction(
+    val name: String = "",
+    val steps: List<InstructionStep> = emptyList()
+)
+
+/** Named InstructionStep rather than Step: the package already exports Measure(s). */
+@Serializable
+data class InstructionStep(
+    val number: Int = 0,
+    val step: String = "",
+    val ingredients: List<StepEntity> = emptyList(),
+    val equipment: List<StepEntity> = emptyList(),
+    val length: StepLength? = null
+)
+
+/** An ingredient or piece of equipment referenced by a single step. */
+@Serializable
+data class StepEntity(
+    val id: Int = 0,
+    val name: String = "",
+    val localizedName: String = "",
+    val image: String? = null
+)
+
+@Serializable
+data class StepLength(
+    val number: Int = 0,
+    val unit: String = ""
 )
 
 /**
