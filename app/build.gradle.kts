@@ -19,6 +19,11 @@ if (spoonacularApiKey.isBlank()) {
     logger.warn("WARNING: SPOONACULAR_API_KEY is not set in local.properties — Spoonacular calls will fail. Get a key at https://spoonacular.com/food-api")
 }
 
+// Optional: LLM-assisted receipt parsing via OpenRouter. Without a key the scanner
+// just uses the built-in heuristic parser, so no warning when unset.
+val openRouterApiKey = localProperties.getProperty("OPENROUTER_API_KEY") ?: ""
+val openRouterModel = localProperties.getProperty("OPENROUTER_MODEL") ?: "google/gemini-2.5-flash"
+
 android {
     namespace = "com.example.pantryparty"
     compileSdk = 37
@@ -32,6 +37,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SPOONACULAR_API_KEY", "\"$spoonacularApiKey\"")
+        buildConfigField("String", "OPENROUTER_API_KEY", "\"$openRouterApiKey\"")
+        buildConfigField("String", "OPENROUTER_MODEL", "\"$openRouterModel\"")
     }
 
     buildTypes {

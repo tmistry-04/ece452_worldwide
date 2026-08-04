@@ -1,6 +1,7 @@
 package com.example.pantryparty
 
 import com.example.pantryparty.data.CatalogItem
+import com.example.pantryparty.fakes.FakeOpenRouterRepository
 import com.example.pantryparty.fakes.FakePantryDao
 import com.example.pantryparty.fakes.FakeSpoonacularRepository
 import com.example.pantryparty.network.IngredientAutocomplete
@@ -37,8 +38,25 @@ class ReceiptScanViewModelTest {
         aisle: String? = null
     ) = IngredientAutocomplete(id = id, name = name, image = image, aisle = aisle, possibleUnits = units)
 
-    private fun viewModel(dao: FakePantryDao, repo: FakeSpoonacularRepository) =
-        ReceiptScanViewModel(dao, repo) { today }
+    private fun viewModel(dao: FakePantryDao, repo: FakeSpoonacularRepository, llm: FakeOpenRouterRepository) =
+        ReceiptScanViewModel(dao, repo, llm) { today }
+
+    /** JSON for one item as the model is prompted to emit it. */
+    private fun llmItem(
+        name: String,
+        quantity: Int = 1,
+        unit: String? = null,
+        raw: String = name.uppercase()
+    ): String {
+        val unitJson = if (unit == null) "null" else "\"$unit\""
+        return """{"raw": "$raw", "name": "$name", "quantity": $quantity, "unit": $unitJson}"""
+    }
+
+    /** A configured fake model whose reply is a JSON array of the given [llmItem]s. */
+    private fun llmAnswering(vararg items: String) = FakeOpenRouterRepository().apply {
+        isConfigured = true
+        completion = Result.success("[${items.joinToString(",")}]")
+    }
 
     /** Answers only for the listed queries; anything else comes back empty. */
     private fun FakeSpoonacularRepository.answer(vararg pairs: Pair<String, IngredientAutocomplete>) {
@@ -54,13 +72,14 @@ class ReceiptScanViewModelTest {
     // --- matching -------------------------------------------------------------
 
     @Test
-    fun matchedLines_becomeIncludedRows() = runTest {
+    fun extractedItems_becomeIncludedRows() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer(
             "whole milk" to ingredient(1, "whole milk", listOf("l", "cup")),
             "bananas" to ingredient(2, "banana", listOf("piece"))
         )
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("whole milk", unit = "l"), llmItem("bananas"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("WHL MILK 2L        5.49", "BANANAS            1.82"))
         advanceUntilIdle()
@@ -79,7 +98,8 @@ class ReceiptScanViewModelTest {
             // The API answers "cucumber pickle" for "pickles" — usable, but not certain.
             "pickles" to ingredient(9, "cucumber pickle")
         )
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("whole milk"), llmItem("pickles"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("WHL MILK           5.49", "PICKLES            3.99"))
         advanceUntilIdle()
@@ -92,7 +112,8 @@ class ReceiptScanViewModelTest {
     @Test
     fun noSuggestions_leavesRowUnmatchedAndExcluded() = runTest {
         val repo = FakeSpoonacularRepository()   // returns empty for everything
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("mystery item"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("MYSTERY ITEM       4.99"))
         advanceUntilIdle()
@@ -104,8 +125,9 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun receiptWithNoItems_failsWithGuidance() = runTest {
-        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository())
+    fun modelFindsNoItems_failsWithGuidance() = runTest {
+        // "[]" is the model's answer for a receipt with nothing purchasable on it.
+        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository(), llmAnswering())
 
         vm.onLinesRecognized(listOf("SUBTOTAL   24.51", "TOTAL   27.69", "VISA   27.69"))
         advanceUntilIdle()
@@ -120,7 +142,8 @@ class ReceiptScanViewModelTest {
         val repo = FakeSpoonacularRepository()
         // Only the bare head noun is a known ingredient — the whole shelf label isn't.
         repo.answer("corn" to ingredient(3, "corn"))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("green giant sweet corn"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("GRN GIANT SWT CRN   2.49"))
         advanceUntilIdle()
@@ -134,13 +157,14 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun repeatedLines_collapseIntoOneRowWithTheSummedQuantity() = runTest {
+    fun duplicateModelItems_collapseIntoOneRowWithTheSummedQuantity() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("milk" to ingredient(1, "milk"))
-        val vm = viewModel(FakePantryDao(), repo)
+        // The prompt asks the model to merge a product's repeated lines itself;
+        // this is the seatbelt for replies that list them separately.
+        val llm = llmAnswering(llmItem("milk", quantity = 2), llmItem("milk", quantity = 1))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
-        // A receipt prints one line per unit bought, so three lines is a quantity of
-        // three — not three separate things to confirm.
         vm.onLinesRecognized(listOf("MILK      4.99", "MILK      4.99", "MILK      4.99"))
         advanceUntilIdle()
 
@@ -153,13 +177,14 @@ class ReceiptScanViewModelTest {
     fun lookupFailure_surfacesAsAWarningRatherThanSilence() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.autocompleteHandler = { Result.failure(IOException("offline")) }
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("bananas"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("BANANAS      1.82"))
         advanceUntilIdle()
 
         val state = review(vm.state.value)
-        assertNotNull("an offline scan must explain itself", state.warning)
+        assertNotNull("a failed lookup must explain itself", state.warning)
         assertNull(state.rows.single().match)
     }
 
@@ -168,7 +193,8 @@ class ReceiptScanViewModelTest {
     @Test
     fun pickingAMatch_makesTheRowConfidentAndIncluded() = runTest {
         val repo = FakeSpoonacularRepository()
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("mystery item"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("MYSTERY ITEM       4.99"))
         advanceUntilIdle()
@@ -187,7 +213,8 @@ class ReceiptScanViewModelTest {
     fun quantityInput_keepsOnlyDigits() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("bananas" to ingredient(2, "banana"))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("bananas"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("BANANAS      1.82"))
         advanceUntilIdle()
@@ -199,16 +226,19 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun receiptSize_choosesTheUnitWhenTheIngredientSupportsIt() = runTest {
+    fun modelUnit_isChosenWhenTheIngredientSupportsIt() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("whole milk" to ingredient(1, "whole milk", listOf("cup", "l", "ml")))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("whole milk", quantity = 2, unit = "l"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("WHL MILK 2L        5.49"))
         advanceUntilIdle()
 
-        // "2L" on the receipt beats the API's first-listed "cup".
-        assertEquals("l", review(vm.state.value).rows.single().unit)
+        // The "2L" the model read off the receipt beats the API's first-listed "cup".
+        val row = review(vm.state.value).rows.single()
+        assertEquals("l", row.unit)
+        assertEquals("2", row.quantity)
     }
 
     // --- committing -----------------------------------------------------------
@@ -218,7 +248,8 @@ class ReceiptScanViewModelTest {
         val dao = FakePantryDao()
         val repo = FakeSpoonacularRepository()
         repo.answer("bananas" to ingredient(2, "banana", listOf("piece"), image = "banana.jpg", aisle = "Produce"))
-        val vm = viewModel(dao, repo)
+        val llm = llmAnswering(llmItem("bananas", quantity = 2))
+        val vm = viewModel(dao, repo, llm)
 
         vm.onLinesRecognized(listOf("2 BANANAS      1.82"))
         advanceUntilIdle()
@@ -251,7 +282,8 @@ class ReceiptScanViewModelTest {
         )
         val repo = FakeSpoonacularRepository()
         repo.answer("bananas" to ingredient(2, "banana"))
-        val vm = viewModel(dao, repo)
+        val llm = llmAnswering(llmItem("bananas"))
+        val vm = viewModel(dao, repo, llm)
 
         vm.onLinesRecognized(listOf("BANANAS      1.82"))
         advanceUntilIdle()
@@ -272,7 +304,8 @@ class ReceiptScanViewModelTest {
             "bananas" to ingredient(2, "banana"),
             "milk" to ingredient(1, "milk")
         )
-        val vm = viewModel(dao, repo)
+        val llm = llmAnswering(llmItem("bananas"), llmItem("milk"), llmItem("mystery"))
+        val vm = viewModel(dao, repo, llm)
 
         vm.onLinesRecognized(listOf("BANANAS   1.82", "MILK   4.99", "MYSTERY   9.99"))
         advanceUntilIdle()
@@ -289,7 +322,8 @@ class ReceiptScanViewModelTest {
     @Test
     fun confirmAll_withNothingSelected_doesNotWrite() = runTest {
         val dao = FakePantryDao()
-        val vm = viewModel(dao, FakeSpoonacularRepository())
+        val llm = llmAnswering(llmItem("mystery item"))
+        val vm = viewModel(dao, FakeSpoonacularRepository(), llm)
 
         vm.onLinesRecognized(listOf("MYSTERY ITEM   9.99"))
         advanceUntilIdle()
@@ -302,18 +336,20 @@ class ReceiptScanViewModelTest {
     }
 
     @Test
-    fun twoLinesOfTheSameIngredient_becomeOneLotOfTwo() = runTest {
+    fun aRepeatedProduct_becomesOneLotWithTheFullCount() = runTest {
         val dao = FakePantryDao()
         val repo = FakeSpoonacularRepository()
         repo.answer("milk" to ingredient(1, "milk"))
-        val vm = viewModel(dao, repo)
+        // The model merged the receipt's two identical lines into quantity 2.
+        val llm = llmAnswering(llmItem("milk", quantity = 2))
+        val vm = viewModel(dao, repo, llm)
 
         vm.onLinesRecognized(listOf("MILK   4.99", "MILK   4.99"))
         advanceUntilIdle()
         vm.confirmAll()
         advanceUntilIdle()
 
-        // Both lines came off one receipt, so they share a purchase date and expiry —
+        // Both units came off one receipt, so they share a purchase date and expiry —
         // one lot of two, not two lots of one.
         assertEquals(1, dao.itemsSnapshot().size)
         val lot = dao.transactionsSnapshot().single()
@@ -325,9 +361,11 @@ class ReceiptScanViewModelTest {
     @Test
     fun aSuggestionSharingNoWordWithTheQuery_isRejected() = runTest {
         val repo = FakeSpoonacularRepository()
-        // What autocomplete actually did with a street address ending in "AVE".
+        // Even a bad extraction (a street address the model failed to skip) must not
+        // become a confident-looking row when autocomplete answers with junk.
         repo.answer("n florida ave" to ingredient(9, "agave"))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("n florida ave"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("8885 N FLORIDA AVE   1.00"))
         advanceUntilIdle()
@@ -341,7 +379,8 @@ class ReceiptScanViewModelTest {
     fun ordinaryPlurals_stillMatch() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("bananas" to ingredient(2, "banana"))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("bananas"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("BANANAS   1.82"))
         advanceUntilIdle()
@@ -354,13 +393,94 @@ class ReceiptScanViewModelTest {
     fun withNoPrintedSize_aPackageUnitIsPreferredOverRawWeight() = runTest {
         val repo = FakeSpoonacularRepository()
         repo.answer("bread" to ingredient(3, "bread", listOf("g", "kg", "piece")))
-        val vm = viewModel(FakePantryDao(), repo)
+        val llm = llmAnswering(llmItem("bread"))   // no unit on the receipt line
+        val vm = viewModel(FakePantryDao(), repo, llm)
 
         vm.onLinesRecognized(listOf("BREAD   2.88"))
         advanceUntilIdle()
 
         // Was "g" — a loaf of bread measured in grams the user never weighed.
         assertEquals("piece", review(vm.state.value).rows.single().unit)
+    }
+
+    // --- the model call -------------------------------------------------------
+
+    @Test
+    fun theOcrText_reachesTheModel_andTheRawLineSurvivesToReview() = runTest {
+        val repo = FakeSpoonacularRepository()
+        repo.answer("whole milk" to ingredient(1, "whole milk", listOf("l")))
+        val llm = llmAnswering(llmItem("whole milk", quantity = 2, unit = "l", raw = "WHL MLK 2L 5.49"))
+        val vm = viewModel(FakePantryDao(), repo, llm)
+
+        vm.onLinesRecognized(listOf("WHL MLK 2L        5.49"))
+        advanceUntilIdle()
+
+        assertEquals(1, llm.completeCalls)
+        assertTrue("OCR text must reach the model", llm.lastUser!!.contains("WHL MLK 2L"))
+        val row = review(vm.state.value).rows.single()
+        assertEquals("WHL MLK 2L 5.49", row.raw)   // printed text still shown in review
+        assertTrue(row.confident)
+    }
+
+    @Test
+    fun llmFailure_failsTheScanWithAFriendlyMessage() = runTest {
+        val llm = FakeOpenRouterRepository().apply {
+            isConfigured = true
+            completion = Result.failure(IOException("offline"))
+        }
+        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository(), llm)
+
+        vm.onLinesRecognized(listOf("BANANAS      1.82"))
+        advanceUntilIdle()
+
+        val failed = vm.state.value as ScanState.Failed
+        assertTrue("expected a connectivity hint, got: ${failed.message}", failed.message.contains("internet"))
+    }
+
+    @Test
+    fun aProseReply_failsTheScanInsteadOfInventingItems() = runTest {
+        val llm = FakeOpenRouterRepository().apply {
+            isConfigured = true
+            completion = Result.success("I'm sorry, I can't parse this receipt.")
+        }
+        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository(), llm)
+
+        vm.onLinesRecognized(listOf("BANANAS      1.82"))
+        advanceUntilIdle()
+
+        assertTrue(vm.state.value is ScanState.Failed)
+    }
+
+    /** Regression: a stalled model must cost at most the timeout, never hang the scan. */
+    @Test
+    fun aStalledModel_timesOutIntoAFailure() = runTest {
+        val llm = FakeOpenRouterRepository().apply {
+            isConfigured = true
+            hang = true
+        }
+        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository(), llm)
+
+        vm.onLinesRecognized(listOf("BANANAS      1.82"))
+        advanceUntilIdle()   // virtual clock runs past the timeout
+
+        val failed = vm.state.value as ScanState.Failed
+        assertTrue("expected a timeout message, got: ${failed.message}", failed.message.contains("too long"))
+    }
+
+    @Test
+    fun withoutAnApiKey_theScanFailsBeforeCallingAnything() = runTest {
+        val llm = FakeOpenRouterRepository()   // isConfigured = false
+        val vm = viewModel(FakePantryDao(), FakeSpoonacularRepository(), llm)
+
+        vm.onLinesRecognized(listOf("BANANAS      1.82"))
+        advanceUntilIdle()
+
+        assertEquals(0, llm.completeCalls)
+        val failed = vm.state.value as ScanState.Failed
+        assertTrue(
+            "the message must say how to enable scanning, got: ${failed.message}",
+            failed.message.contains("OPENROUTER_API_KEY")
+        )
     }
 
     // --- fallback query construction -----------------------------------------

@@ -7,11 +7,14 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.pantryparty.data.PantryDao
 import com.example.pantryparty.network.IngredientAutocomplete
+import com.example.pantryparty.network.OpenRouterRepository
+import com.example.pantryparty.network.OpenRouterRepositoryImpl
 import com.example.pantryparty.network.SpoonacularRepository
 import com.example.pantryparty.network.SpoonacularRepositoryImpl
 import com.example.pantryparty.network.friendlyApiError
+import com.example.pantryparty.network.friendlyLlmError
+import com.example.pantryparty.receipt.LlmReceiptExtractor
 import com.example.pantryparty.receipt.ReceiptLine
-import com.example.pantryparty.receipt.parseReceipt
 import com.example.pantryparty.recipe.normalizeIngredientName
 import java.time.LocalDate
 import kotlinx.coroutines.Job
@@ -24,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Where the scan flow is: framing a shot, working, reviewing, done, or stuck. */
 sealed interface ScanState {
@@ -79,6 +83,7 @@ data class ScanRowUi(
 class ReceiptScanViewModel(
     private val dao: PantryDao,
     private val repository: SpoonacularRepository = SpoonacularRepositoryImpl,
+    private val llm: OpenRouterRepository = OpenRouterRepositoryImpl,
     private val today: () -> LocalDate = { LocalDate.now() }
 ) : ViewModel() {
 
@@ -113,41 +118,63 @@ class ReceiptScanViewModel(
     }
 
     /**
-     * Turns recognized text into reviewable rows: parse the receipt, then resolve each
-     * candidate against Spoonacular. Nothing is written to the pantry here — the user
-     * confirms first, because receipt shorthand guarantees some guesses are wrong.
+     * Turns recognized text into reviewable rows: the model parses the receipt, then
+     * each candidate is resolved against Spoonacular. Nothing is written to the pantry
+     * here — the user confirms first, because the model's guesses can be wrong.
+     *
+     * The LLM is the only parser, so scanning requires OpenRouter to be configured
+     * and reachable; every miss (no key, timeout, request error, unusable reply)
+     * fails the scan with a message that says which of those it was.
      */
     fun onLinesRecognized(lines: List<String>) {
-        val candidates = parseReceipt(lines)
-        if (candidates.isEmpty()) {
-            _state.value = ScanState.Failed(
-                "No grocery items found on that receipt. Try again with more light, " +
-                    "holding the phone steady and level."
-            )
-            return
-        }
         _state.value = ScanState.Processing
         viewModelScope.launch {
             lookupFailure = null
+            if (!llm.isConfigured) {
+                _state.value = ScanState.Failed(
+                    "Receipt scanning needs an OpenRouter API key — set OPENROUTER_API_KEY in local.properties."
+                )
+                return@launch
+            }
+            val reply = withTimeoutOrNull(LLM_TIMEOUT_MS) {
+                llm.complete(
+                    system = LlmReceiptExtractor.SYSTEM_PROMPT,
+                    user = LlmReceiptExtractor.userPrompt(lines)
+                )
+            }
+            if (reply == null) {
+                _state.value = ScanState.Failed("Reading the receipt took too long — try again.")
+                return@launch
+            }
+            val content = reply.getOrElse { e ->
+                _state.value = ScanState.Failed(friendlyLlmError(e))
+                return@launch
+            }
+            // An unusable reply and a genuinely item-free receipt get the same
+            // guidance: both look like "nothing scannable here" to the user.
+            val candidates = LlmReceiptExtractor.parseResponse(content).orEmpty()
+            if (candidates.isEmpty()) {
+                _state.value = ScanState.Failed(
+                    "No grocery items found on that receipt. Try again with more light, " +
+                        "holding the phone steady and level."
+                )
+                return@launch
+            }
             val rows = resolveAll(groupDuplicates(candidates))
             _state.value = ScanState.Review(rows = rows, warning = lookupFailure)
         }
     }
 
     /**
-     * Merges the repeated lines a multi-unit purchase produces.
+     * Merges rows that resolved to the same cleaned name.
      *
-     * Receipts print one line per unit, so buying four jars of peanut butter prints four
-     * identical lines — which would otherwise become four separate review cards the user
-     * has to confirm one at a time, and four identical ingredient lookups.
-     *
-     * Keyed on the product code where the receipt prints one, because it is exact; the
-     * cleaned query is the fallback for receipts that don't. Merging on the *raw* line
-     * would fail here, since the price column can differ between two lines for the same
-     * item.
+     * The prompt already asks the model to merge a product's repeated lines (receipts
+     * print one line per unit bought); this is the seatbelt for replies that list them
+     * separately, so the user never confirms one purchase twice and the same name is
+     * never looked up twice.
      */
     private fun groupDuplicates(lines: List<ReceiptLine>): List<ReceiptLine> =
-        lines.groupBy { it.upc ?: it.query }
+        lines.groupBy { it.query }
             .map { (_, group) -> group.first().copy(quantity = group.sumOf { it.quantity }) }
 
     /**
@@ -335,6 +362,12 @@ class ReceiptScanViewModel(
         private const val LOOKUP_CONCURRENCY = 6
 
         /**
+         * Hard cap on the model call. Generous because there is no other parser:
+         * past this the scan fails with a retry message rather than hanging.
+         */
+        private const val LLM_TIMEOUT_MS = 20_000L
+
+        /**
          * Units that describe a thing rather than an amount of it. Preferred when the
          * receipt printed no size, since a receipt line is a purchased package.
          */
@@ -385,9 +418,10 @@ class ReceiptScanViewModel(
         /** Factory that injects the dependencies (no DI framework in the project). */
         fun factory(
             dao: PantryDao,
-            repository: SpoonacularRepository = SpoonacularRepositoryImpl
+            repository: SpoonacularRepository = SpoonacularRepositoryImpl,
+            llm: OpenRouterRepository = OpenRouterRepositoryImpl
         ): ViewModelProvider.Factory = viewModelFactory {
-            initializer { ReceiptScanViewModel(dao, repository) }
+            initializer { ReceiptScanViewModel(dao, repository, llm) }
         }
     }
 }
