@@ -6,6 +6,26 @@ import kotlinx.serialization.Serializable
 // back safely instead of failing to parse (SpoonacularJson also ignores unknown
 // keys, so new response fields can't break us either).
 
+/**
+ * `food/ingredients/substitutes` — note the failure shape.
+ *
+ * A miss is NOT an HTTP error. Verified against the live API: "no substitutes known"
+ * comes back as HTTP 200 with `{"status":"failure","message":"..."}` and no
+ * `ingredient` or `substitutes` key at all, so every field here must carry a default
+ * or that response fails to parse outright. Callers branch on [status], never on the
+ * HTTP code — see IngredientSubstitutions.read.
+ *
+ * [status] defaults to "" so an unrecognised shape fails closed, reading as "none
+ * found" rather than as a fabricated success.
+ */
+@Serializable
+data class IngredientSubstitutes(
+    val status: String = "",
+    val ingredient: String = "",
+    val substitutes: List<String> = emptyList(),
+    val message: String = ""
+)
+
 /** One suggestion from the autocomplete endpoint (metaInformation=true). */
 @Serializable
 data class IngredientAutocomplete(
@@ -41,6 +61,28 @@ data class RecipeByIngredient(
     val missedIngredientCount: Int = 0,
     val usedIngredients: List<RecipeIngredientBrief> = emptyList(),
     val missedIngredients: List<RecipeIngredientBrief> = emptyList()
+)
+
+/**
+ * One suggestion from `recipes/{id}/similar`.
+ *
+ * GOTCHA: [image] here is a BARE FILENAME ("Chicken-Verde-638409.jpg"), not the
+ * absolute URL complexSearch and information return — verified against the live API.
+ * Render it through `recipeImageUrl`, never directly.
+ *
+ * The endpoint returns no used/missed ingredient split, so these cards can't show
+ * the have/missing pills RecipeCard does. There is nothing to compare against the
+ * pantry until one is opened.
+ */
+@Serializable
+data class SimilarRecipe(
+    val id: Int,
+    val title: String = "",
+    val image: String? = null,
+    val imageType: String? = null,
+    val readyInMinutes: Int? = null,
+    val servings: Int? = null,
+    val sourceUrl: String? = null
 )
 
 /** Lightweight ingredient shape used inside findByIngredients results. */
@@ -85,7 +127,29 @@ data class RecipeInformation(
     val whole30: Boolean = false,
     val dishTypes: List<String> = emptyList(),
     val cuisines: List<String> = emptyList(),
-    val diets: List<String> = emptyList()
+    val diets: List<String> = emptyList(),
+    val nutrition: Nutrition? = null            // only when includeNutrition=true
+)
+
+/**
+ * Per-serving nutrition, present only when the request set `includeNutrition=true`.
+ *
+ * `caloricBreakdown`, `properties`, `flavonoids` and `weightPerServing` come back
+ * too and are deliberately not modelled — nothing renders them, and
+ * `ignoreUnknownKeys` drops them for free. A modelled field nothing draws reads
+ * like a promise.
+ */
+@Serializable
+data class Nutrition(
+    val nutrients: List<Nutrient> = emptyList()
+)
+
+@Serializable
+data class Nutrient(
+    val name: String = "",
+    val amount: Double = 0.0,
+    val unit: String = "",
+    val percentOfDailyNeeds: Double = 0.0
 )
 
 /**
