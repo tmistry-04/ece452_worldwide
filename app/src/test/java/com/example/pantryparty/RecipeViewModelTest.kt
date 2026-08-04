@@ -213,6 +213,65 @@ class RecipeViewModelTest {
         assertEquals(1, repo.detailsCalls)   // second check served from the cache
     }
 
+    // --- the follow-up staples fetch ----------------------------------------
+
+    @Test
+    fun staplesFetchFailure_isReported_butTheRecipesStayOnScreen() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+
+        vm.search()
+        advanceUntilIdle()
+
+        val ui = vm.uiState.value
+        assertTrue(ui.staplesError!!.contains("quota"))
+        // `error` blanks the results list, so the partial failure must not set it.
+        assertNull(ui.error)
+        assertEquals(1, ui.recipes.size)
+    }
+
+    @Test
+    fun aSucceedingSearch_clearsAnEarlierStaplesError() = runTest {
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.detailsResult = Result.failure(
+            HttpException(Response.error<Any>(402, "".toResponseBody()))
+        )
+        val vm = startViewModel()
+        vm.search()
+        advanceUntilIdle()
+        assertNotNull(vm.uiState.value.staplesError)
+
+        repo.detailsResult = Result.success(listOf(omelette()))
+        vm.search()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.staplesError)
+    }
+
+    @Test
+    fun aCancelledSearch_doesNotReportAStaplesError() = runTest {
+        // The repository rethrows CancellationException rather than folding it into
+        // a failed Result, so replacing an in-flight search must stay silent.
+        seedStock("egg", stock = 6, unit = "piece", spoonacularId = 1)
+        repo.recipesResult = Result.success(listOf(searchResult(10, missed = 0)))
+        repo.hangDetails = true
+        val vm = startViewModel()
+        vm.search()
+        advanceUntilIdle()
+
+        repo.hangDetails = false
+        repo.detailsResult = Result.success(listOf(omelette()))
+        vm.search()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.staplesError)
+    }
+
     // --- the recipe detail page ---------------------------------------------
 
     /** An omelette needing 2 eggs and 3 tbsp butter. */

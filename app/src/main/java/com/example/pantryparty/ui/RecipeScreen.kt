@@ -126,6 +126,16 @@ fun RecipeScreen(dao: PantryDao, modifier: Modifier = Modifier) {
             Text(it, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(8.dp))
         }
+        // The search worked; only the follow-up details fetch didn't. Sits above
+        // the results as a note rather than replacing them.
+        ui.staplesError?.let {
+            Text(
+                "Couldn't load full recipe details: $it",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+        }
 
         if (!ui.loading && ui.hasSearched && ui.error == null) {
             RecipeResults(

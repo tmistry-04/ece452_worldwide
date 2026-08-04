@@ -51,6 +51,14 @@ data class RecipeUiState(
     val ingredientSearch: Boolean = true,
     val loading: Boolean = false,
     val error: String? = null,
+    /**
+     * The follow-up details fetch failed, so staple lists are missing.
+     *
+     * Kept separate from [error] on purpose: the search itself succeeded and the
+     * recipes are worth showing. [error] blanks the whole results list, which
+     * would turn a partial degradation into a total one.
+     */
+    val staplesError: String? = null,
     val hasSearched: Boolean = false,
 )
 
@@ -192,7 +200,12 @@ class RecipeViewModel(
         }
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            _uiState.update { it.copy(loading = true, error = null, hasSearched = true, staplesByRecipe = emptyMap()) }
+            _uiState.update {
+                it.copy(
+                    loading = true, error = null, staplesError = null,
+                    hasSearched = true, staplesByRecipe = emptyMap()
+                )
+            }
             _cardStates.value = emptyMap()
             // An open detail belongs to results that are about to be replaced.
             closeRecipeDetail()
@@ -286,8 +299,13 @@ class RecipeViewModel(
      * Fetches full details for the shown recipes once, caches them, and computes
      * each recipe's staple list (ingredients the search ignored). Runs inside the
      * search job so it is cancelled along with the search it belongs to.
-     * Best-effort: if this call fails (e.g. quota), the results still show, just
-     * without staples.
+     *
+     * Best-effort: the recipes are already on screen and stay there if this fails.
+     * The failure is reported through [RecipeUiState.staplesError] rather than
+     * `error` — the latter blanks the results list — so the user learns why the
+     * staple lists are missing instead of finding out by tapping into a card.
+     * Cancellation never lands here: the repository rethrows it rather than
+     * folding it into a failed Result.
      */
     private suspend fun loadStaples(recipes: List<RecipeByIngredient>) {
         if (recipes.isEmpty()) return
@@ -306,7 +324,10 @@ class RecipeViewModel(
                             .map { ing -> ing.name }
                     } ?: emptyList())
                 }
-                _uiState.update { it.copy(staplesByRecipe = staples) }
+                _uiState.update { it.copy(staplesByRecipe = staples, staplesError = null) }
+            }
+            .onFailure { e ->
+                _uiState.update { it.copy(staplesError = friendlyApiError(e)) }
             }
     }
 
