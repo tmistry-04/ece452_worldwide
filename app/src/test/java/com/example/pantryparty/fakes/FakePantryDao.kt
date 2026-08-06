@@ -54,6 +54,9 @@ class FakePantryDao : PantryDao {
     override suspend fun findBySpoonacularId(spoonacularId: Int): CatalogItem? =
         items.value.firstOrNull { it.spoonacularId == spoonacularId }
 
+    override suspend fun getItem(id: Long): CatalogItem? =
+        items.value.firstOrNull { it.id == id }
+
     override suspend fun nextSortOrder(): Int =
         (items.value.maxOfOrNull { it.sortOrder } ?: -1) + 1
 

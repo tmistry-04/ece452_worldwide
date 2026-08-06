@@ -618,7 +618,7 @@ private fun EditorDetailsStep(
         value = state.desiredAmount,
         onChange = onDesiredAmountChange,
         label = "Desired amount",
-        supportingText = "How much you want to keep stocked"
+        supportingText = "How much to keep stocked — 0 removes the item once it's used up"
     )
     Spacer(Modifier.height(10.dp))
 

@@ -708,6 +708,33 @@ class RecipeViewModelTest {
     }
 
     @Test
+    fun confirmConsume_retiresAUsedUpItemThatHasNoDesiredAmount() = runTest {
+        // Receipt-added items carry desired 0; cooking the last of one removes it
+        // from the catalog instead of leaving a permanent zero-stock row.
+        val egg = seedStock("egg", stock = 2, unit = "piece", spoonacularId = 1)
+        dao.updateItem(egg.copy(desiredAmount = 0))
+        repo.detailsResult = Result.success(
+            listOf(
+                RecipeInformation(
+                    id = 10, title = "Omelette",
+                    extendedIngredients = listOf(
+                        ExtendedIngredient(id = 1, name = "egg", amount = 2.0, unit = "piece")
+                    )
+                )
+            )
+        )
+        val vm = startViewModel()
+
+        vm.prepareConsume(10)
+        advanceUntilIdle()
+        vm.confirmConsume(10)
+        advanceUntilIdle()
+
+        assertTrue(dao.itemsSnapshot().isEmpty())
+        assertTrue(dao.transactionsSnapshot().isEmpty())
+    }
+
+    @Test
     fun confirmConsume_splitsAcrossLotsOldestFirst() = runTest {
         val egg = seedStock("egg", stock = 3, unit = "piece", spoonacularId = 1)   // lot at date 100
         val newer = dao.seedTransactions(

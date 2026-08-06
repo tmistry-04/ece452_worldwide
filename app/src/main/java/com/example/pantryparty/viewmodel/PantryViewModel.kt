@@ -115,7 +115,11 @@ data class ItemEditorState(
     val searching: Boolean get() = editing == null && selected == null
     val desired: Int get() = desiredAmount.toIntOrNull() ?: 0
     val resolvedUnit: String get() = if (customUnit) customUnitText.trim() else unit
-    val canSave: Boolean get() = !searching && desired > 0 && name.isNotBlank() && resolvedUnit.isNotEmpty()
+
+    /** 0 is a real choice ("don't restock; retire it when used up") — only blank is unsaveable. */
+    val canSave: Boolean
+        get() = !searching && desiredAmount.toIntOrNull() != null &&
+            name.isNotBlank() && resolvedUnit.isNotEmpty()
 }
 
 /**
@@ -476,6 +480,8 @@ class PantryViewModel(
                     UseKind.TOSSED -> lot.copy(amountThrown = lot.amountThrown + draft.quantity)
                 }
             )
+            // Using up the last of an item the user never wanted stocked retires it.
+            dao.deleteIfDepleted(draft.item.id)
             _useDraft.value = null
         }
     }

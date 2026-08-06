@@ -555,6 +555,8 @@ class RecipeViewModel(
                 for ((lot, take) in PantryMath.fifoPlan(dao.transactionsFor(current.id), deduct)) {
                     dao.updateTransaction(lot.copy(amountUsed = lot.amountUsed + take))
                 }
+                // Using up the last of an item the user never wanted stocked retires it.
+                dao.deleteIfDepleted(current.id)
             }
         }
         updateCard(recipeId) { it.copy(consume = null) }

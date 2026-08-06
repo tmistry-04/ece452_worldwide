@@ -31,6 +31,10 @@ interface PantryDao {
     @Query("SELECT * FROM catalog_items WHERE spoonacularId = :spoonacularId LIMIT 1")
     suspend fun findBySpoonacularId(spoonacularId: Int): CatalogItem?
 
+    /** One catalog row by id, or null if it's gone. */
+    @Query("SELECT * FROM catalog_items WHERE id = :id LIMIT 1")
+    suspend fun getItem(id: Long): CatalogItem?
+
     /** The next free sortOrder, so new items append to the end of the list. */
     @Query("SELECT COALESCE(MAX(sortOrder), -1) + 1 FROM catalog_items")
     suspend fun nextSortOrder(): Int
@@ -106,8 +110,10 @@ interface PantryDao {
         val itemId = existing?.id ?: insertItem(
             CatalogItem(
                 name = name,
-                // The first purchase sets the target: "keep as much as I just bought".
-                desiredAmount = quantity,
+                // A receipt says what was bought, not what the user wants stocked —
+                // no desired amount until they set one. Zero also opts the item into
+                // [deleteIfDepleted]'s cleanup once it's used up.
+                desiredAmount = 0,
                 spoonacularId = spoonacularId,
                 imageUrl = imageUrl,
                 sortOrder = nextSortOrder(),
@@ -124,6 +130,24 @@ interface PantryDao {
             )
         )
         return itemId
+    }
+
+    /**
+     * Removes the item (history and all) once its stock has run out, but only when
+     * its desired amount is 0 — no target means nothing says to restock it, so a
+     * used-up item would sit in the list as permanent clutter. Items with a target
+     * stay put at zero stock: that's the "buy more" reminder.
+     *
+     * Called after the consumption flows (the use dialog, cooking a recipe), not
+     * after history edits — an item shouldn't vanish while its details are being
+     * tidied by hand.
+     */
+    @Transaction
+    suspend fun deleteIfDepleted(itemId: Long) {
+        val item = getItem(itemId) ?: return
+        if (item.desiredAmount > 0) return
+        if (transactionsFor(itemId).sumOf { it.remaining } > 0) return
+        deleteItem(item)
     }
 
     // ---- staples ("always have") -------------------------------------------

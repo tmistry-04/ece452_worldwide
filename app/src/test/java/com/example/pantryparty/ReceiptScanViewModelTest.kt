@@ -261,6 +261,8 @@ class ReceiptScanViewModelTest {
         assertEquals(2, item.spoonacularId)
         assertEquals("banana.jpg", item.imageUrl)
         assertEquals("Produce", item.aisle)
+        // A receipt records what was bought, not what the user wants stocked.
+        assertEquals(0, item.desiredAmount)
 
         val lot = dao.transactionsSnapshot().single()
         assertEquals(item.id, lot.catalogItemId)

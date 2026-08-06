@@ -172,9 +172,12 @@ fun PantryScreen(dao: PantryDao) {
                     )
                 }
             } else {
-                // Anything expiring, expired, or out of stock floats to the top —
-                // the whole point of the app is to surface what needs using now.
-                val (urgent, stocked) = rows.partition { it.expiry.hasWarning || it.stock == 0 }
+                // Anything needing attention floats to the top, but expiring stock and
+                // an empty shelf are different problems: "use these soon" is only honest
+                // about items that still have something to use. (Expiry warnings only
+                // count remaining stock, so the two groups can't overlap.)
+                val (urgent, rest) = rows.partition { it.expiry.hasWarning }
+                val (outOfStock, stocked) = rest.partition { it.stock == 0 }
 
                 if (urgent.isNotEmpty()) {
                     item(key = "urgent-header") {
@@ -185,6 +188,20 @@ fun PantryScreen(dao: PantryDao) {
                         )
                     }
                     items(urgent, key = { it.item.id }) { row ->
+                        SwipeablePantryRow(
+                            row = row,
+                            onBuy = { viewModel.openBuy(row.item) },
+                            onUse = { viewModel.openUse(row.item) },
+                            onClick = { viewModel.openDetail(row.item) }
+                        )
+                    }
+                }
+
+                if (outOfStock.isNotEmpty()) {
+                    item(key = "out-of-stock-header") {
+                        SectionHeader(text = "Out of stock", urgent = false)
+                    }
+                    items(outOfStock, key = { it.item.id }) { row ->
                         SwipeablePantryRow(
                             row = row,
                             onBuy = { viewModel.openBuy(row.item) },
@@ -550,7 +567,7 @@ private fun PantryRowCard(row: PantryRowUi, onClick: () -> Unit) {
     }
 }
 
-/** "▬▬▬▭▭  3 / 5 pieces" — how the on-hand stock compares to the target. */
+/** "▬▬▬▭▭  3 / 5 pieces" — how the on-hand stock compares to the target (if there is one). */
 @Composable
 private fun StockProgressLine(row: PantryRowUi) {
     val desired = row.item.desiredAmount
@@ -571,7 +588,10 @@ private fun StockProgressLine(row: PantryRowUi) {
         )
         Spacer(Modifier.width(10.dp))
         Text(
-            "${row.stock} / $desired ${row.item.unit}",
+            // No target (receipt-added items start that way) → just what's on hand;
+            // "3 / 0" would read as a bug.
+            if (desired > 0) "${row.stock} / $desired ${row.item.unit}"
+            else "${row.stock} ${row.item.unit}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -661,7 +681,9 @@ private fun EditableRow(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "Want ${row.item.desiredAmount} ${row.item.unit}",
+                    if (row.item.desiredAmount > 0)
+                        "Want ${row.item.desiredAmount} ${row.item.unit}"
+                    else "No desired amount",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

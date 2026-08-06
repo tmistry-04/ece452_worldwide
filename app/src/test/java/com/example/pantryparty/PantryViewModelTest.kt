@@ -276,6 +276,56 @@ class PantryViewModelTest {
     }
 
     @Test
+    fun usingTheLastUnit_ofAnItemWithNoDesiredAmount_removesTheItem() = runTest {
+        // Receipt-added items land with desired 0: nothing says to restock them,
+        // so using up the last unit retires the item instead of leaving clutter.
+        val stored = dao.seedItems(item(desired = 0)).single()
+        dao.seedTransactions(txn(stored.id, bought = 2, used = 1))   // 1 left
+        val vm = startViewModel()
+
+        vm.openUse(stored)
+        advanceUntilIdle()
+        vm.setUseAmount("1")
+        vm.confirmUse()
+        advanceUntilIdle()
+
+        assertTrue(dao.itemsSnapshot().isEmpty())
+        assertTrue("history goes with the item", dao.transactionsSnapshot().isEmpty())
+    }
+
+    @Test
+    fun usingTheLastUnit_ofAnItemWithATarget_keepsItAsARestockReminder() = runTest {
+        val stored = dao.seedItems(item(desired = 5)).single()
+        dao.seedTransactions(txn(stored.id, bought = 1)).single()
+        val vm = startViewModel()
+
+        vm.openUse(stored)
+        advanceUntilIdle()
+        vm.setUseAmount("1")
+        vm.confirmUse()
+        advanceUntilIdle()
+
+        assertEquals(1, dao.itemsSnapshot().size)
+        assertEquals(0, vm.rows.value.single().stock)
+    }
+
+    @Test
+    fun usingSomeButNotAll_ofAnItemWithNoDesiredAmount_keepsIt() = runTest {
+        val stored = dao.seedItems(item(desired = 0)).single()
+        dao.seedTransactions(txn(stored.id, bought = 3))
+        val vm = startViewModel()
+
+        vm.openUse(stored)
+        advanceUntilIdle()
+        vm.setUseAmount("2")
+        vm.confirmUse()
+        advanceUntilIdle()
+
+        assertEquals(1, dao.itemsSnapshot().size)
+        assertEquals(1, vm.rows.value.single().stock)
+    }
+
+    @Test
     fun useDialog_withNothingInStock_hasNoLotsToPick() = runTest {
         val stored = dao.seedItems(item()).single()
         dao.seedTransactions(txn(stored.id, bought = 2, used = 2))   // all consumed
@@ -517,12 +567,12 @@ class PantryViewModelTest {
     }
 
     @Test
-    fun blankCustomUnitOrZeroDesired_cannotSave() = runTest {
+    fun blankDesiredAmountOrBlankCustomUnit_cannotSave() = runTest {
         val vm = startViewModel()
         vm.openAddItem()
         vm.selectSuggestion(apple)
 
-        vm.onDesiredAmountChange("0")
+        vm.onDesiredAmountChange("")
         assertFalse(vm.itemEditor.value!!.canSave)
         vm.onDesiredAmountChange("2")
 
@@ -532,6 +582,20 @@ class PantryViewModelTest {
         vm.saveItem()
         advanceUntilIdle()
         assertTrue(dao.itemsSnapshot().isEmpty())
+    }
+
+    @Test
+    fun zeroDesiredAmount_isAValidTargetMeaningDontRestock() = runTest {
+        // 0 is what receipt-added items start with; it must also be settable by
+        // hand so any item can opt into the used-up cleanup (deleteIfDepleted).
+        val vm = startViewModel()
+        vm.openAddItem()
+        vm.selectSuggestion(apple)
+        vm.onDesiredAmountChange("0")
+        vm.saveItem()
+        advanceUntilIdle()
+
+        assertEquals(0, dao.itemsSnapshot().single().desiredAmount)
     }
 
     // --- item editor: modify -------------------------------------------------
